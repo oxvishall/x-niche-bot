@@ -6,7 +6,7 @@ import { DryRunXClient } from "./dry-run-client.js";
 
 export type * from "./client.js";
 export { XApiError, XRateLimitError } from "./errors.js";
-export { DRY_RUN_ID_PREFIX } from "./dry-run-client.js";
+export { DRY_RUN_ID_PREFIX, dryRunPoster } from "./dry-run-client.js";
 
 /**
  * Builds the X client for the current environment. Returns null when

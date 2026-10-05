@@ -10,6 +10,10 @@ import {
   PrismaEngagementRepository,
   type EngagementRepository,
 } from "./database/repositories/engagement-repository.js";
+import {
+  PrismaPublishedPostRepository,
+  type PublishedPostRepository,
+} from "./database/repositories/published-post-repository.js";
 import { PrismaRunRepository, type RunRepository } from "./database/repositories/run-repository.js";
 import { createLogger } from "./utils/logger.js";
 import { createXClient, type XClient } from "./x/index.js";
@@ -18,6 +22,7 @@ export interface Repositories {
   runs: RunRepository;
   posts: DiscoveredPostRepository;
   engagements: EngagementRepository;
+  published: PublishedPostRepository;
 }
 
 /** Everything a job needs, built once per process. */
@@ -53,6 +58,7 @@ export async function createApp(): Promise<App> {
       runs: new PrismaRunRepository(prisma),
       posts: new PrismaDiscoveredPostRepository(prisma),
       engagements: new PrismaEngagementRepository(prisma),
+      published: new PrismaPublishedPostRepository(prisma),
     },
     close: () => prisma.$disconnect(),
   };

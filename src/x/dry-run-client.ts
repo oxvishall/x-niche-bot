@@ -33,3 +33,13 @@ export class DryRunXClient implements XClient {
     return { id: `${DRY_RUN_ID_PREFIX}${randomUUID()}`, text: input.text };
   }
 }
+
+/** A poster for dry runs when no X credentials are configured at all. */
+export function dryRunPoster(logger: Logger): Pick<XClient, "createPost"> {
+  return {
+    async createPost(input: CreatePostInput): Promise<CreatedPost> {
+      logger.info({ text: input.text }, "[dry run] would publish post");
+      return { id: `${DRY_RUN_ID_PREFIX}${randomUUID()}`, text: input.text };
+    },
+  };
+}

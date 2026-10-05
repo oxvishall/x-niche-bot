@@ -9,7 +9,8 @@ export const REVIEW_USAGE = `Usage: npm run review -- <command>
   approve <id> [edited text]   Approve a draft, optionally replacing its text
   reject <id>                  Reject a draft
   links                        Approved replies with X intent links to post them yourself
-  done <id> [reply url or id]  Mark an approved reply as posted (intent delivery)`;
+  done <id> [reply url or id]  Mark an approved reply as posted (intent delivery)
+  posts <command>              Review original post drafts (see: npm run review -- posts)`;
 
 function excerpt(text: string, max = 160): string {
   const flat = text.replace(/\s+/g, " ").trim();
