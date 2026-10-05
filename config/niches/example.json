@@ -1,0 +1,23 @@
+{
+  "niche": {
+    "name": "example",
+    "description": "Placeholder niche. Copy this file and point NICHE_CONFIG_PATH at your copy.",
+    "searchQueries": [],
+    "excludedKeywords": ["giveaway", "airdrop", "follow back"],
+    "languages": ["en"],
+    "minimumRelevanceScore": 0.5
+  },
+  "targeting": {
+    "includeAuthors": [],
+    "excludeAuthors": []
+  },
+  "engagement": {
+    "enabled": false,
+    "mode": "review",
+    "maxRepliesPerHour": 0
+  },
+  "publishing": {
+    "enabled": false,
+    "postsPerDay": 0
+  }
+}

@@ -1,0 +1,176 @@
+// Phase 1 schema — intentionally minimal. Extend in later phases.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Platform {
+  X
+}
+
+enum RunType {
+  DISCOVERY
+  ENGAGEMENT
+  PUBLISHING
+}
+
+enum RunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum EngagementType {
+  REPLY
+}
+
+enum EngagementStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  POSTED
+  FAILED
+  SKIPPED
+}
+
+enum PublishedPostStatus {
+  DRAFT
+  SCHEDULED
+  POSTED
+  FAILED
+}
+
+/// One execution of a scheduled job.
+model BotRun {
+  id         String    @id @default(cuid())
+  niche      String
+  type       RunType
+  status     RunStatus @default(RUNNING)
+  dryRun     Boolean   @default(true)
+  stats      Json?
+  error      String?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  searchRuns SearchRun[]
+
+  @@index([niche, type, startedAt])
+}
+
+/// One search query executed against the platform.
+model SearchRun {
+  id          String    @id @default(cuid())
+  botRunId    String?
+  niche       String
+  query       String
+  /// Newest post ID seen; used as `since_id` on the next run.
+  newestId    String?
+  resultCount Int       @default(0)
+  status      RunStatus @default(RUNNING)
+  error       String?
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+
+  botRun          BotRun?          @relation(fields: [botRunId], references: [id], onDelete: SetNull)
+  discoveredPosts DiscoveredPost[]
+
+  @@index([niche, query, startedAt])
+  @@index([botRunId])
+}
+
+/// A post found via search, normalized, with its relevance evaluation.
+model DiscoveredPost {
+  id             String   @id @default(cuid())
+  platform       Platform @default(X)
+  /// The platform's post ID (X post IDs are 64-bit, so stored as string).
+  externalId     String
+  niche          String
+  searchRunId    String?
+  authorId       String
+  authorUsername String?
+  text           String
+  lang           String?
+  conversationId String?
+  postedAt       DateTime
+
+  likeCount   Int @default(0)
+  replyCount  Int @default(0)
+  repostCount Int @default(0)
+  quoteCount  Int @default(0)
+
+  relevanceScore  Float?
+  matchedKeywords String[]
+  excludedMatches String[]
+  passedFilters   Boolean?
+
+  raw          Json?
+  discoveredAt DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  searchRun   SearchRun?   @relation(fields: [searchRunId], references: [id], onDelete: SetNull)
+  engagements Engagement[]
+
+  @@unique([platform, externalId, niche])
+  @@index([niche, passedFilters, relevanceScore])
+  @@index([niche, postedAt])
+  @@index([authorId])
+  @@index([searchRunId])
+}
+
+/// An engagement (currently a reply) aimed at a discovered post.
+model Engagement {
+  id               String           @id @default(cuid())
+  platform         Platform         @default(X)
+  niche            String
+  discoveredPostId String
+  /// The post being replied to. Unique with type, so a post is never engaged twice.
+  targetExternalId String
+  type             EngagementType   @default(REPLY)
+  status           EngagementStatus @default(PENDING_REVIEW)
+  content          String?
+  /// Hash of normalized content, for duplicate-comment detection.
+  contentHash      String?
+  /// The ID of our reply once posted.
+  externalId       String?
+  dryRun           Boolean          @default(true)
+  error            String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  postedAt         DateTime?
+
+  discoveredPost DiscoveredPost @relation(fields: [discoveredPostId], references: [id], onDelete: Cascade)
+
+  @@unique([platform, targetExternalId, type])
+  @@unique([platform, externalId])
+  @@index([niche, status, createdAt])
+  @@index([contentHash])
+  @@index([discoveredPostId])
+}
+
+/// An original post published (or drafted) by the bot.
+model PublishedPost {
+  id           String              @id @default(cuid())
+  platform     Platform            @default(X)
+  niche        String
+  content      String
+  contentHash  String
+  status       PublishedPostStatus @default(DRAFT)
+  externalId   String?
+  dryRun       Boolean             @default(true)
+  error        String?
+  scheduledFor DateTime?
+  postedAt     DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@unique([platform, externalId])
+  @@index([niche, status, createdAt])
+  @@index([niche, contentHash])
+}
