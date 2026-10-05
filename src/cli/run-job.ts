@@ -3,6 +3,7 @@ import { createApp, type App } from "../app.js";
 import { runDiscovery } from "../services/discovery-service.js";
 import { runEngagement } from "../services/engagement-service.js";
 import { runPublishing } from "../services/publishing-service.js";
+import { formatError } from "../utils/errors.js";
 
 /** Runs a single job once, e.g. `npm run job -- discovery`. */
 const JOBS: Record<string, (app: App) => Promise<unknown>> = {
@@ -30,6 +31,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
+  console.error(formatError(error));
   process.exitCode = 1;
 });

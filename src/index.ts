@@ -1,23 +1,26 @@
 import "dotenv/config";
-import { loadNicheConfig, parseEnv } from "./config/index.js";
-import { createLogger } from "./utils/logger.js";
+import { setTimeout as sleep } from "node:timers/promises";
+import { createApp } from "./app.js";
+import { buildJobs } from "./scheduler/jobs.js";
+import { WorkerLock } from "./scheduler/lock.js";
+import { Scheduler } from "./scheduler/scheduler.js";
+import { formatError } from "./utils/errors.js";
 
+const LOCK_RETRY_MS = 60_000;
+
+/** Long-running worker: runs discovery, engagement and publishing on a schedule. */
 async function main(): Promise<void> {
-  const env = parseEnv();
-  const logger = createLogger({
-    level: env.LOG_LEVEL,
-    name: env.BOT_NAME,
-    pretty: env.NODE_ENV === "development",
-  });
-
-  const niche = await loadNicheConfig(env.NICHE_CONFIG_PATH);
+  const app = await createApp();
+  const { env, niche, logger } = app;
 
   logger.info(
     {
       niche: niche.niche.name,
       dryRun: env.DRY_RUN,
-      engagement: niche.engagement,
-      publishing: niche.publishing,
+      ai: env.AI_PROVIDER,
+      xCredentials: app.x !== null,
+      engagement: { enabled: niche.engagement.enabled, mode: niche.engagement.mode, delivery: niche.engagement.delivery },
+      publishing: { enabled: niche.publishing.enabled, mode: niche.publishing.mode },
       searchQueries: niche.niche.searchQueries.length,
     },
     "Configuration loaded",
@@ -25,16 +28,38 @@ async function main(): Promise<void> {
 
   if (!env.BOT_ENABLED) {
     logger.warn("BOT_ENABLED=false — exiting without running");
+    await app.close();
     return;
   }
 
-  // Phase 1: foundation only. Discovery, engagement, publishing and the
-  // scheduler are implemented in later phases.
-  logger.info("Phase 1 foundation ready — no jobs implemented yet");
+  const lock = new WorkerLock(env.DATABASE_URL, `x-niche-bot:${niche.niche.name}`);
+  const scheduler = new Scheduler(logger.child({ module: "scheduler" }));
+  for (const job of buildJobs(app)) scheduler.register(job);
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ signal }, "Shutting down");
+    await scheduler.stop();
+    await lock.release();
+    await app.close();
+  };
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+
+  while (!(await lock.tryAcquire())) {
+    if (shuttingDown) return;
+    logger.warn("Another worker is running this niche; standing by");
+    await sleep(LOCK_RETRY_MS);
+  }
+  if (shuttingDown) return;
+
+  scheduler.start();
 }
 
 main().catch((error: unknown) => {
   // Config errors list variable names only, never values.
-  console.error(error instanceof Error ? error.message : error);
+  console.error(formatError(error));
   process.exitCode = 1;
 });

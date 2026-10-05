@@ -2,6 +2,7 @@ import "dotenv/config";
 import { createApp } from "../app.js";
 import { REVIEW_USAGE, runReviewCommand } from "../engagement/review.js";
 import { runPostReviewCommand } from "../publishing/review.js";
+import { formatError } from "../utils/errors.js";
 
 /** Human review of drafted replies (`npm run review -- list`) and posts (`npm run review -- posts list`). */
 async function main(): Promise<void> {
@@ -24,6 +25,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
+  console.error(formatError(error));
   process.exitCode = 1;
 });
