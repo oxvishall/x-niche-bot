@@ -44,4 +44,12 @@ describe("niche config", () => {
       parseNicheConfig({ niche: { name: "empty" }, engagement: { enabled: true } }),
     ).toThrow(/searchQueries/);
   });
+
+  it("defaults to review + intent delivery and rejects auto without api delivery", () => {
+    const config = parseNicheConfig({ niche: { name: "n" } });
+    expect(config.engagement).toMatchObject({ mode: "review", delivery: "intent" });
+    expect(() =>
+      parseNicheConfig({ niche: { name: "n" }, engagement: { mode: "auto" } }),
+    ).toThrow(/delivery "api"/);
+  });
 });

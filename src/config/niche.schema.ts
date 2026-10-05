@@ -105,15 +105,41 @@ export const nicheConfigSchema = z
     search: searchSchema,
     filters: filtersSchema,
     scoring: scoringSchema,
+    /** How the bot writes. Shared by replies and original posts. */
+    voice: z
+      .object({
+        persona: z.string().min(1).default("a knowledgeable, friendly practitioner in this niche"),
+        tone: z.string().min(1).default("conversational, concise and specific"),
+        /** Extra rules for the model, e.g. "never give financial advice". */
+        guidelines: stringList,
+        /** Phrases generated text must never contain (case-insensitive). */
+        bannedPhrases: stringList,
+      })
+      .prefault({}),
     engagement: z
       .object({
         enabled: z.boolean().default(false),
         /**
-         * "review": generated replies are queued for human approval.
-         * "auto": replies are posted automatically (only where X automation rules allow).
+         * "review": generated replies wait for human approval.
+         * "auto": approved automatically (requires delivery "api").
          */
         mode: z.enum(["review", "auto"]).default("review"),
+        /**
+         * "intent": you post approved replies yourself via an X web-intent link.
+         * "api": posted through the X API. Since Feb 2026 X only allows API replies
+         * when the author mentioned/quoted you, unless you have Enterprise access.
+         */
+        delivery: z.enum(["intent", "api"]).default("intent"),
         maxRepliesPerHour: z.number().int().min(0).default(0),
+        /** Replies drafted per engagement run (each costs one AI call). */
+        maxDraftsPerRun: z.number().int().min(0).max(50).default(3),
+        maxRepliesPerAuthorPerDay: z.number().int().min(1).default(1),
+        /** X weighted characters. */
+        maxLength: z.number().int().min(20).max(280).default(240),
+        allowHashtags: z.boolean().default(false),
+        allowLinks: z.boolean().default(false),
+        /** Replies at least this similar (0–1) to a recent one are rejected. */
+        similarityThreshold: ratio.default(0.6),
       })
       .prefault({}),
     publishing: z
@@ -140,6 +166,13 @@ export const nicheConfigSchema = z
           message: `author "${author}" is both included and excluded`,
         });
       }
+    }
+    if (config.engagement.mode === "auto" && config.engagement.delivery !== "api") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["engagement", "mode"],
+        message: 'mode "auto" requires delivery "api" (intent delivery needs a human)',
+      });
     }
     if (Object.values(config.scoring.weights).every((w) => w === 0)) {
       ctx.addIssue({

@@ -5,8 +5,14 @@
     "searchQueries": [],
     "keywords": [],
     "hashtags": [],
-    "excludedKeywords": ["giveaway", "airdrop", "follow back"],
-    "languages": ["en"],
+    "excludedKeywords": [
+      "giveaway",
+      "airdrop",
+      "follow back"
+    ],
+    "languages": [
+      "en"
+    ],
     "minimumRelevanceScore": 0.5
   },
   "targeting": {
@@ -30,10 +36,23 @@
     "keywordSaturation": 2,
     "engagementTarget": 50
   },
+  "voice": {
+    "persona": "a knowledgeable, friendly practitioner in this niche",
+    "tone": "conversational, concise and specific",
+    "guidelines": [],
+    "bannedPhrases": []
+  },
   "engagement": {
     "enabled": false,
     "mode": "review",
-    "maxRepliesPerHour": 0
+    "delivery": "intent",
+    "maxRepliesPerHour": 0,
+    "maxDraftsPerRun": 3,
+    "maxRepliesPerAuthorPerDay": 1,
+    "maxLength": 240,
+    "allowHashtags": false,
+    "allowLinks": false,
+    "similarityThreshold": 0.6
   },
   "publishing": {
     "enabled": false,
