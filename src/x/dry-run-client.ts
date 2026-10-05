@@ -16,6 +16,7 @@ export class DryRunXClient implements XClient {
   ) {}
 
   searchPosts: XClient["searchPosts"] = (params) => this.inner.searchPosts(params);
+  getMentions: XClient["getMentions"] = (params) => this.inner.getMentions(params);
   getPost: XClient["getPost"] = (id) => this.inner.getPost(id);
   getUser: XClient["getUser"] = (id) => this.inner.getUser(id);
   getAuthenticatedUser: XClient["getAuthenticatedUser"] = () => this.inner.getAuthenticatedUser();

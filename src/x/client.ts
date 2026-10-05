@@ -24,6 +24,21 @@ export interface SearchPostsResult {
   nextToken?: string;
 }
 
+export interface GetMentionsParams {
+  /** The bot's own user ID. */
+  userId: string;
+  /** 5–100 per X limits. */
+  maxResults?: number;
+  sinceId?: string;
+  startTime?: Date;
+  paginationToken?: string;
+}
+
+export interface MentionsResult extends SearchPostsResult {
+  /** Posts the mentions reply to or quote (thread context), keyed by ID. */
+  referencedPosts: Map<string, NormalizedPost>;
+}
+
 export interface CreatePostInput {
   text: string;
 }
@@ -35,6 +50,8 @@ export interface CreateReplyInput {
 
 export interface XClient {
   searchPosts(params: SearchPostsParams): Promise<SearchPostsResult>;
+  /** Posts that @mention the given user, newest first. */
+  getMentions(params: GetMentionsParams): Promise<MentionsResult>;
   getPost(postId: string): Promise<NormalizedPost | null>;
   getUser(userId: string): Promise<NormalizedAuthor | null>;
   /** The account the credentials belong to. */

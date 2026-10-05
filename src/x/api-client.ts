@@ -3,6 +3,8 @@ import type { CreatedPost, NormalizedAuthor, NormalizedPost } from "../types/ind
 import type {
   CreatePostInput,
   CreateReplyInput,
+  GetMentionsParams,
+  MentionsResult,
   SearchPostsParams,
   SearchPostsResult,
   XClient,
@@ -67,6 +69,30 @@ export class XApiClient implements XClient {
     const users = indexUsers(body.includes?.users);
     return {
       posts: (body.data ?? []).map((t) => mapTweet(t, users)),
+      ...(body.meta?.newest_id && { newestId: body.meta.newest_id }),
+      ...(body.meta?.next_token && { nextToken: body.meta.next_token }),
+    };
+  }
+
+  async getMentions(params: GetMentionsParams): Promise<MentionsResult> {
+    const body = await this.request<{
+      data?: ApiTweet[];
+      includes?: { users?: ApiUser[]; tweets?: ApiTweet[] };
+      meta?: { newest_id?: string; next_token?: string };
+    }>("GET", `/2/users/${encodeURIComponent(params.userId)}/mentions`, {
+      max_results: params.maxResults,
+      since_id: params.sinceId,
+      start_time: params.sinceId ? undefined : params.startTime?.toISOString(),
+      pagination_token: params.paginationToken,
+      "tweet.fields": TWEET_FIELDS,
+      "user.fields": USER_FIELDS,
+      expansions: "author_id,referenced_tweets.id,referenced_tweets.id.author_id",
+    });
+
+    const users = indexUsers(body.includes?.users);
+    return {
+      posts: (body.data ?? []).map((t) => mapTweet(t, users)),
+      referencedPosts: new Map((body.includes?.tweets ?? []).map((t) => [t.id, mapTweet(t, users)])),
       ...(body.meta?.newest_id && { newestId: body.meta.newest_id }),
       ...(body.meta?.next_token && { nextToken: body.meta.next_token }),
     };

@@ -69,6 +69,37 @@ describe("XApiClient", () => {
     });
   });
 
+  it("fetches mentions with their thread context", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        data: [
+          {
+            id: "300",
+            text: "@bot what do you think about this?",
+            author_id: "u2",
+            created_at: "2026-10-05T11:00:00.000Z",
+            referenced_tweets: [{ type: "replied_to", id: "250" }],
+          },
+        ],
+        includes: {
+          users: [{ id: "u2", username: "carol" }],
+          tweets: [{ id: "250", text: "Oracle lag caused the liquidation cascade", author_id: "u2" }],
+        },
+        meta: { newest_id: "300", next_token: "n2" },
+      }),
+    );
+
+    const result = await clientWith(fetchMock).getMentions({ userId: "me", sinceId: "200", maxResults: 10 });
+
+    const requestUrl = new URL(fetchMock.mock.calls[0]![0] as URL);
+    expect(requestUrl.pathname).toBe("/2/users/me/mentions");
+    expect(requestUrl.searchParams.get("since_id")).toBe("200");
+    expect(requestUrl.searchParams.get("expansions")).toContain("referenced_tweets.id");
+    expect(result.posts[0]).toMatchObject({ id: "300", inReplyToPostId: "250", author: { username: "carol" } });
+    expect(result.referencedPosts.get("250")?.text).toBe("Oracle lag caused the liquidation cascade");
+    expect(result).toMatchObject({ newestId: "300", nextToken: "n2" });
+  });
+
   it("sends replies with the in_reply_to_tweet_id payload", async () => {
     const fetchMock = vi
       .fn()

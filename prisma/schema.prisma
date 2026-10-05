@@ -15,6 +15,20 @@ enum Platform {
   X
 }
 
+/// How a post entered the system.
+enum PostOrigin {
+  SEARCH
+  MENTION
+}
+
+/// How an approved reply gets posted.
+enum ReplyDelivery {
+  /// A human posts it via an X web-intent link.
+  INTENT
+  /// The bot posts it through the X API.
+  API
+}
+
 enum RunType {
   DISCOVERY
   ENGAGEMENT
@@ -88,18 +102,22 @@ model SearchRun {
 
 /// A post found via search, normalized, with its relevance evaluation.
 model DiscoveredPost {
-  id             String   @id @default(cuid())
-  platform       Platform @default(X)
+  id              String     @id @default(cuid())
+  platform        Platform   @default(X)
   /// The platform's post ID (X post IDs are 64-bit, so stored as string).
-  externalId     String
-  niche          String
-  searchRunId    String?
-  authorId       String
-  authorUsername String?
-  text           String
-  lang           String?
-  conversationId String?
-  postedAt       DateTime
+  externalId      String
+  niche           String
+  origin          PostOrigin @default(SEARCH)
+  searchRunId     String?
+  authorId        String
+  authorUsername  String?
+  text            String
+  lang            String?
+  conversationId  String?
+  /// The post this one replies to, and its text (thread context for mentions).
+  inReplyToPostId String?
+  parentText      String?
+  postedAt        DateTime
 
   likeCount   Int @default(0)
   replyCount  Int @default(0)
@@ -126,7 +144,7 @@ model DiscoveredPost {
   engagements Engagement[]
 
   @@unique([platform, externalId, niche])
-  @@index([niche, eligible, relevanceScore])
+  @@index([niche, origin, eligible, relevanceScore])
   @@index([niche, postedAt])
   @@index([authorId])
   @@index([searchRunId])
@@ -143,6 +161,7 @@ model Engagement {
   /// Author of the target post, for per-author limits.
   targetAuthorId   String
   type             EngagementType   @default(REPLY)
+  delivery         ReplyDelivery    @default(INTENT)
   status           EngagementStatus @default(PENDING_REVIEW)
   content          String?
   /// Hash of normalized content, for duplicate-comment detection.
@@ -165,6 +184,7 @@ model Engagement {
   @@unique([platform, targetExternalId, type])
   @@unique([platform, externalId])
   @@index([niche, status, createdAt])
+  @@index([niche, status, delivery])
   @@index([niche, status, postedAt])
   @@index([targetAuthorId, createdAt])
   @@index([contentHash])
