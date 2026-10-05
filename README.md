@@ -1,22 +1,16 @@
 # x-niche-bot
 
-A reusable, configuration-driven bot for X (Twitter). Eventually it will discover posts in a niche, score them for relevance, draft replies, publish original posts and track everything in PostgreSQL. You switch niches by changing a config file, not code.
+A reusable, configuration-driven bot for X (Twitter). It discovers posts in a niche, scores them for relevance, drafts replies for you to review, publishes original posts, and tracks everything in PostgreSQL. You switch niches by changing a config file, not code.
 
 It uses **only the official X API**. It has no browser automation, scraping, or cookie/session access.
 
 ## Status
 
-| Phase | Scope | Status |
-| --- | --- | --- |
-| 1 | Foundation: config, schema, logging, tooling | Done |
-| 2 | X API client, discovery, filtering, relevance scoring, persistence | Done |
-| 3 | AI replies, validation, dedup, rate limits, review queue | Done |
-| 4 | Original post generation and publishing | Done |
-| 5 | Scheduler/worker | Planned |
+All five phases are built: foundation, discovery, replies, publishing, and the scheduler/worker. Everything is covered by unit tests with mocked X and AI calls. It has **not yet been run against a real database, X account or AI key**, so do the first live run with `DRY_RUN=true` (see [Going live](#going-live)).
 
 ## Tech stack
 
-Node.js ≥ 20.19 · TypeScript · PostgreSQL · Prisma 7 (with `@prisma/adapter-pg`) · Zod 4 · Pino · Vitest · tsx (dev runner)
+Node.js ≥ 20.19 · TypeScript · PostgreSQL · Prisma 7 (with `@prisma/adapter-pg`) · `pg` (worker lock) · Zod 4 · Pino · Anthropic SDK · Vitest · tsx (dev runner)
 
 ## Project structure
 
@@ -32,7 +26,7 @@ src/
   content/            Shared voice prompt and generated-text validation
   engagement/         Reply prompt, engagement engine, review commands
   publishing/         Post prompt, publishing engine, post review commands
-  scheduler/          Job scheduling / worker                         (later)
+  scheduler/          In-process scheduler, job list, Postgres worker lock
   database/           Prisma client factory + repositories/
   services/           Job-level orchestration (discovery, engagement, publishing, run tracking)
   cli/                Run-once job CLI and review CLI
@@ -40,7 +34,7 @@ src/
   utils/              Logger and shared helpers
   types/              Platform-agnostic domain types
   generated/          Generated Prisma client (gitignored)
-  index.ts            Entry point
+  index.ts            Worker entry point
 tests/                Vitest tests
 ```
 
@@ -172,6 +166,20 @@ How a post is written:
 
 With `mode: "review"`, drafts queue up (at most 3 at a time) and you approve them with `npm run review -- posts list | approve <id> [edit] | reject <id>`. The next publishing run posts approved drafts.
 
+## Worker
+
+`npm run dev` (from source) or `npm start` (built) starts the long-running worker:
+
+| Job | Interval | What it does |
+| --- | --- | --- |
+| `discover-and-engage` | `DISCOVERY_INTERVAL_MINUTES` | Discovery, then engagement: posts approved replies (API delivery) and drafts new ones. If discovery fails, engagement still runs on stored posts. |
+| `publish` | `PUBLISH_INTERVAL_MINUTES` | Publishes or drafts at most one original post. |
+
+- Both jobs run once at startup, then on their intervals. A job never overlaps itself, and a failed run is logged without stopping the worker.
+- Every run is recorded in `BotRun` with its stats or error.
+- **One worker per niche:** the worker holds a Postgres advisory lock keyed on the niche name. A second instance stands by and retries every minute, so starting two can't cause double replies or posts. Different niches can run side by side on one database.
+- `SIGINT`/`SIGTERM` stop scheduling, wait for in-flight runs, release the lock and disconnect.
+
 ## Local setup
 
 ```bash
@@ -192,27 +200,38 @@ docker run -d --name x-niche-bot-db -p 5432:5432 \
   -e POSTGRES_USER=bot -e POSTGRES_PASSWORD=bot -e POSTGRES_DB=x_niche_bot postgres:17
 # DATABASE_URL=postgresql://bot:bot@localhost:5432/x_niche_bot?schema=public
 
-npm run db:migrate          # applies migrations in prisma/migrations
+npm run db:migrate          # dev: applies migrations in prisma/migrations
+npm run db:deploy           # production: applies pending migrations only
 npm run db:studio           # browse data
 ```
 
 Key constraints:
 - `DiscoveredPost`: unique on `(platform, externalId, niche)`.
 - `Engagement`: unique on `(platform, targetExternalId, type)`, so a post can never be replied to twice.
-- Both `Engagement` and `PublishedPost` store a `contentHash`, used later for duplicate-content checks.
+- Both `Engagement` and `PublishedPost` store a `contentHash` for duplicate-content checks.
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `npm run dev` | Run from source with watch mode (tsx). |
+| `npm run dev` | Run the worker from source with watch mode (tsx). |
 | `npm run build` | Compile to `dist/`. |
-| `npm run start` | Run the compiled build. |
+| `npm run start` | Run the compiled worker. |
 | `npm test` | Run tests once. |
 | `npm run test:watch` | Run tests in watch mode. |
 | `npm run typecheck` | Type-check src and tests. |
 | `npm run db:migrate` | Create/apply migrations (dev). |
+| `npm run db:deploy` | Apply pending migrations (production/CI). |
 | `npm run db:generate` | Generate the Prisma client. |
 | `npm run db:studio` | Open Prisma Studio. |
 | `npm run job -- <name>` | Run one job once (`discovery`, `engagement`, `publishing`). |
-| `npm run review -- <command>` | Review drafted replies (see [Review commands](#review-commands)). |
+| `npm run review -- <command>` | Review drafted replies and posts (see [Review commands](#review-commands)). |
+
+## Going live
+
+1. Create a niche config: copy `config/niches/example.json`, then fill in `searchQueries`, `voice`, `publishing.topics` and the `enabled` flags. Point `NICHE_CONFIG_PATH` at it.
+2. Fill in `.env` with the database, the four X credentials and the AI provider. Keep `DRY_RUN=true`.
+3. `npm run db:deploy`, then run each job once: `npm run job -- discovery`, `npm run job -- engagement`, `npm run job -- publishing`.
+4. Check the results in `npm run db:studio`. `DiscoveredPost.filterReasons` and `scoreBreakdown` show why posts did or didn't qualify. Tune the queries, filters, weights and `minimumRelevanceScore` until the eligible posts look right.
+5. Read the drafts with `npm run review -- list` and `npm run review -- posts list`. Adjust `voice` until you'd post them yourself.
+6. Set `DRY_RUN=false` and start the worker with `npm start`.
