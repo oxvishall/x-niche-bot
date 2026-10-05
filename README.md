@@ -10,7 +10,7 @@ It uses **only the official X API**. It has no browser automation, scraping, or 
 | --- | --- | --- |
 | 1 | Foundation: config, schema, logging, tooling | Done |
 | 2 | X API client, discovery, filtering, relevance scoring, persistence | Done |
-| 3 | AI replies, validation, dedup, rate limits, review queue | Planned |
+| 3 | AI replies, validation, dedup, rate limits, review queue | Done |
 | 4 | Original post generation and publishing | Planned |
 | 5 | Scheduler/worker | Planned |
 
@@ -28,12 +28,14 @@ src/
   config/             Env + niche config schemas and loaders
   x/                  X API v2 client (OAuth 1.0a), dry-run wrapper, response mapping
   discovery/          Query building, filters, relevance scoring, discovery engine
-  engagement/         Reply generation, validation, review queue      (Phase 3)
+  ai/                 AI provider interface + Anthropic implementation
+  content/            Shared voice prompt and generated-text validation
+  engagement/         Reply prompt, engagement engine, review commands
   publishing/         Original post generation and publishing         (Phase 4)
   scheduler/          Job scheduling / worker                         (later)
   database/           Prisma client factory + repositories/
-  services/           Job-level orchestration (discovery, run tracking)
-  cli/                Run-once job CLI
+  services/           Job-level orchestration (discovery, engagement, run tracking)
+  cli/                Run-once job CLI and review CLI
   app.ts              Builds env, logger, DB, X client and repositories
   utils/              Logger and shared helpers
   types/              Platform-agnostic domain types
@@ -67,13 +69,14 @@ Copy `.env.example` to `.env`. Blank values fall back to defaults. Validation er
 | `MAX_POSTS_PER_DAY` | no | `3` | Global daily original-post cap. |
 | `DISCOVERY_INTERVAL_MINUTES` | no | `15` | How often discovery runs. |
 | `PUBLISH_INTERVAL_MINUTES` | no | `240` | How often publishing runs. |
-| `AI_PROVIDER` | no | `none` | `none` \| `anthropic` \| `openai`. |
+| `AI_PROVIDER` | no | `none` | `none` \| `anthropic`. |
 | `AI_API_KEY` | when provider ≠ `none` | — | AI provider API key. |
-| `AI_MODEL` | when provider ≠ `none` | — | Model ID for the provider. |
+| `AI_MODEL` | when provider ≠ `none` | — | Model ID, e.g. `claude-opus-5-5`. |
+| `AI_EFFORT` | no | model default | `low` \| `medium` \| `high` \| `xhigh` \| `max`. |
 
 **Why only four X credentials:** OAuth 1.0a user context covers both recent search and creating posts/replies as the bot account. You don't need `X_BEARER_TOKEN` (app-only, read-only) or `X_CLIENT_ID`/`X_CLIENT_SECRET` (OAuth 2.0 PKCE). Add them later only if we switch auth methods.
 
-The env rate limits are global caps. The niche config's `engagement.maxRepliesPerHour` can be stricter, and the lower value wins.
+The env rate limits are global caps. The niche config's optional `engagement.maxRepliesPerHour` can be stricter, and the lower value wins. Dry-run and live replies are counted separately.
 
 ## Niche configuration
 
@@ -89,13 +92,13 @@ Each niche is a JSON file validated by `src/config/niche.schema.ts`:
     "minimumRelevanceScore": 0.5
   },
   "targeting": { "includeAuthors": [], "excludeAuthors": [] },
-  "engagement": { "enabled": false, "mode": "review", "maxRepliesPerHour": 0 },
+  "engagement": { "enabled": false, "mode": "review", "delivery": "intent" },
   "publishing": { "enabled": false, "postsPerDay": 0 }
 }
 ```
 
 - `niche.name` is a slug that tags every database row, so several niches can share one database.
-- `engagement.mode` defaults to `review`: generated replies wait for human approval. X's automation rules restrict automated replies to posts found only through keyword search, so use `auto` only where the rules allow it.
+- `engagement.mode` defaults to `review` and `engagement.delivery` to `intent`. See [Replies](#replies) for why.
 - Everything except `niche.name` has a safe default. See `config/niches/example.json` for every option, including `search`, `filters` and `scoring`.
 
 To switch niches, create `config/niches/<your-niche>.json` and set `NICHE_CONFIG_PATH`.
@@ -123,6 +126,35 @@ Each discovery run does the following:
 A post is **eligible** when it passes every filter and scores at least `minimumRelevanceScore`. If you leave `keywords`/`hashtags` empty, they're taken from `searchQueries`.
 
 Run one discovery pass by hand: `npm run job -- discovery`. It needs the X credentials, even in dry-run mode, because search is a real API call.
+
+## Replies
+
+**X API restriction.** Since 23 February 2026, X rejects replies posted through the API on the Free, Basic, Pro and Pay-Per-Use tiers, unless the original author @mentioned your account or quoted one of your posts. Enterprise is unaffected. So the bot drafts replies, and by default you post them yourself.
+
+The engagement pipeline: **eligible post → per-author limit → AI draft → validation (one retry with feedback) → review queue → delivery**.
+
+- **Drafting:** the prompt includes the niche voice (`voice.persona`, `tone`, `guidelines`), the post (marked as untrusted data), why it matched, and your recent replies so wording isn't repeated. The model can answer `SKIP` when there's nothing useful to add (sensitive topics, bait, missing facts).
+- **Validation:** checks X weighted length, links, hashtags, @mentions, banned phrases (built-in generic openers like "great point" plus `voice.bannedPhrases`), excluded keywords, exact duplicates (content hash) and near-duplicates (`similarityThreshold`) against the last 50 replies.
+- **Never twice:** every drafted, skipped or failed attempt is stored, and a database unique constraint stops a second reply to the same post.
+- **Limits:** `maxDraftsPerRun`, `maxPendingReviews` and `maxRepliesPerAuthorPerDay` in the niche config. For API delivery, the hourly and daily caps also apply.
+
+| `delivery` | How replies get posted |
+| --- | --- |
+| `intent` (default) | `npm run review -- approve <id>` prints an X web-intent link. It opens X's own composer with the reply filled in, and you click Post. Then run `npm run review -- done <id>`. |
+| `api` | Approved replies are posted by the next engagement run. Only works with Enterprise access, or for posts that mention or quote you. A 403 is recorded as `FAILED` with an explanation. |
+
+`mode: "auto"` skips human review and requires `delivery: "api"`.
+
+### Review commands
+
+```bash
+npm run review -- list                     # drafts waiting for review
+npm run review -- approve <id>             # approve as written
+npm run review -- approve <id> new text    # approve with your own edit
+npm run review -- reject <id>
+npm run review -- links                    # approved replies with intent links
+npm run review -- done <id> [reply url]    # mark as posted
+```
 
 ## Local setup
 
@@ -166,4 +198,5 @@ Key constraints:
 | `npm run db:migrate` | Create/apply migrations (dev). |
 | `npm run db:generate` | Generate the Prisma client. |
 | `npm run db:studio` | Open Prisma Studio. |
-| `npm run job -- <name>` | Run one job once (`discovery`). |
+| `npm run job -- <name>` | Run one job once (`discovery`, `engagement`). |
+| `npm run review -- <command>` | Review drafted replies (see [Review commands](#review-commands)). |
