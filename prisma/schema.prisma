@@ -41,8 +41,9 @@ enum EngagementStatus {
 }
 
 enum PublishedPostStatus {
-  DRAFT
-  SCHEDULED
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
   POSTED
   FAILED
 }
@@ -172,21 +173,25 @@ model Engagement {
 
 /// An original post published (or drafted) by the bot.
 model PublishedPost {
-  id           String              @id @default(cuid())
-  platform     Platform            @default(X)
-  niche        String
-  content      String
-  contentHash  String
-  status       PublishedPostStatus @default(DRAFT)
-  externalId   String?
-  dryRun       Boolean             @default(true)
-  error        String?
-  scheduledFor DateTime?
-  postedAt     DateTime?
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  id          String              @id @default(cuid())
+  platform    Platform            @default(X)
+  niche       String
+  content     String
+  contentHash String
+  /// Configured topic this post was written about.
+  topic       String?
+  status      PublishedPostStatus @default(PENDING_REVIEW)
+  externalId  String?
+  dryRun      Boolean             @default(true)
+  aiModel     String?
+  error       String?
+  reviewedAt  DateTime?
+  postedAt    DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
 
   @@unique([platform, externalId])
   @@index([niche, status, createdAt])
+  @@index([niche, status, postedAt])
   @@index([niche, contentHash])
 }

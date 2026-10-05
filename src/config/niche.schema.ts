@@ -148,7 +148,37 @@ export const nicheConfigSchema = z
     publishing: z
       .object({
         enabled: z.boolean().default(false),
+        /** "auto" posts straight away; "review" queues drafts for approval. */
+        mode: z.enum(["review", "auto"]).default("auto"),
+        /** Niche cap; MAX_POSTS_PER_DAY still applies and the lower one wins. */
         postsPerDay: z.number().int().min(0).default(0),
+        minMinutesBetweenPosts: z.number().int().min(0).default(120),
+        /** Themes to rotate through; the least recently used is picked next. */
+        topics: stringList,
+        /** Include recent high-scoring discovered posts as context, so posts stay timely. */
+        useDiscoveredContext: z.boolean().default(true),
+        maxLength: z.number().int().min(20).max(280).default(280),
+        allowHashtags: z.boolean().default(false),
+        allowLinks: z.boolean().default(false),
+        similarityThreshold: ratio.default(0.5),
+        /** Only publish between these hours (inclusive start, exclusive end). */
+        activeHours: z
+          .object({
+            start: z.number().int().min(0).max(23),
+            end: z.number().int().min(1).max(24),
+            timezone: z
+              .string()
+              .default("UTC")
+              .refine((tz) => {
+                try {
+                  new Intl.DateTimeFormat("en-US", { timeZone: tz });
+                  return true;
+                } catch {
+                  return false;
+                }
+              }, "unknown timezone"),
+          })
+          .optional(),
       })
       .prefault({}),
   })

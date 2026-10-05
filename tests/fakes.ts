@@ -12,6 +12,12 @@ import type {
   NewEngagement,
 } from "../src/database/repositories/engagement-repository.js";
 import type {
+  NewPublishedPost,
+  PublishedPostRepository,
+  PublishedPostStatus,
+  PublishedPostView,
+} from "../src/database/repositories/published-post-repository.js";
+import type {
   FinishSearchRunInput,
   RunRepository,
   RunStatus,
@@ -93,6 +99,14 @@ export class InMemoryDiscoveredPostRepository implements DiscoveredPostRepositor
         matchedHashtags: r.evaluation.matchedHashtags,
       }));
   }
+
+  async findTopTexts(niche: string, since: Date, limit: number): Promise<string[]> {
+    return [...this.rows.values()]
+      .filter((r) => r.niche === niche && r.evaluation.eligible && r.post.createdAt >= since)
+      .sort((a, b) => b.evaluation.score - a.evaluation.score)
+      .slice(0, limit)
+      .map((r) => r.post.text);
+  }
 }
 
 export class InMemoryEngagementRepository implements EngagementRepository {
@@ -161,6 +175,89 @@ export class InMemoryEngagementRepository implements EngagementRepository {
       .reverse()
       .slice(0, limit)
       .map((r) => r.content!);
+  }
+
+  private update(id: string, patch: Partial<(typeof this.rows)[number]>) {
+    Object.assign(this.rows.find((r) => r.id === id)!, patch);
+  }
+
+  async approve(id: string, content?: string, contentHash?: string) {
+    this.update(id, { status: "APPROVED", ...(content && { content }), ...(contentHash && { contentHash }) });
+  }
+
+  async reject(id: string) {
+    this.update(id, { status: "REJECTED" });
+  }
+
+  async markPosted(id: string, externalId: string | null) {
+    this.update(id, { status: "POSTED", postedAt: this.clock(), externalId });
+  }
+
+  async markFailed(id: string, error: string) {
+    this.update(id, { status: "FAILED", error });
+  }
+}
+
+export class InMemoryPublishedPostRepository implements PublishedPostRepository {
+  rows: (NewPublishedPost & { id: string; createdAt: Date })[] = [];
+  private seq = 0;
+
+  constructor(private readonly clock: () => Date = () => new Date()) {}
+
+  async create(input: NewPublishedPost) {
+    const id = `pub-${++this.seq}`;
+    this.rows.push({ ...input, id, createdAt: this.clock() });
+    return id;
+  }
+
+  private view(r: (typeof this.rows)[number]): PublishedPostView {
+    return {
+      id: r.id,
+      status: r.status,
+      content: r.content,
+      topic: r.topic ?? null,
+      dryRun: r.dryRun,
+      createdAt: r.createdAt,
+      postedAt: r.postedAt ?? null,
+    };
+  }
+
+  async get(id: string) {
+    const row = this.rows.find((r) => r.id === id);
+    return row ? this.view(row) : null;
+  }
+
+  async list(niche: string, statuses: PublishedPostStatus[], limit: number) {
+    return this.rows.filter((r) => r.niche === niche && statuses.includes(r.status)).slice(0, limit).map((r) => this.view(r));
+  }
+
+  async countByStatus(niche: string, status: PublishedPostStatus) {
+    return this.rows.filter((r) => r.niche === niche && r.status === status).length;
+  }
+
+  async countPostedSince(niche: string, since: Date, dryRun: boolean) {
+    return this.rows.filter((r) => r.niche === niche && r.status === "POSTED" && r.dryRun === dryRun && r.postedAt! >= since).length;
+  }
+
+  async lastPostedAt(niche: string, dryRun: boolean) {
+    const posted = this.rows.filter((r) => r.niche === niche && r.status === "POSTED" && r.dryRun === dryRun);
+    return posted.at(-1)?.postedAt ?? null;
+  }
+
+  async recentContents(niche: string, limit: number) {
+    return this.rows
+      .filter((r) => r.niche === niche && ["PENDING_REVIEW", "APPROVED", "POSTED"].includes(r.status))
+      .reverse()
+      .slice(0, limit)
+      .map((r) => r.content);
+  }
+
+  async topicLastUsed(niche: string) {
+    const map = new Map<string, Date>();
+    for (const r of this.rows) {
+      if (r.niche === niche && r.topic && r.status !== "REJECTED" && r.status !== "FAILED") map.set(r.topic, r.createdAt);
+    }
+    return map;
   }
 
   private update(id: string, patch: Partial<(typeof this.rows)[number]>) {

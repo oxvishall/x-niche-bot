@@ -41,6 +41,8 @@ export interface DiscoveredPostRepository {
   upsertMany(niche: string, items: EvaluatedPost[]): Promise<UpsertResult>;
   /** Eligible posts with no engagement yet, best score first. */
   findCandidates(input: FindCandidatesInput): Promise<CandidatePost[]>;
+  /** Texts of the highest-scoring eligible posts since `since` (engaged or not). */
+  findTopTexts(niche: string, since: Date, limit: number): Promise<string[]>;
 }
 
 function toRow(niche: string, { post, evaluation, searchRunId }: EvaluatedPost) {
@@ -129,5 +131,15 @@ export class PrismaDiscoveredPostRepository implements DiscoveredPostRepository 
       },
     });
     return rows.map((row) => ({ ...row, relevanceScore: row.relevanceScore ?? 0 }));
+  }
+
+  async findTopTexts(niche: string, since: Date, limit: number): Promise<string[]> {
+    const rows = await this.prisma.discoveredPost.findMany({
+      where: { niche, eligible: true, postedAt: { gte: since } },
+      orderBy: { relevanceScore: "desc" },
+      take: limit,
+      select: { text: true },
+    });
+    return rows.map((r) => r.text);
   }
 }
