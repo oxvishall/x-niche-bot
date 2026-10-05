@@ -30,6 +30,8 @@ export interface NormalizedPost {
   lang?: string;
   conversationId?: string;
   inReplyToPostId?: string;
+  isRepost: boolean;
+  isQuote: boolean;
   createdAt: Date;
   metrics: PostMetrics;
 }
