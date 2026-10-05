@@ -1,0 +1,46 @@
+# Local/self-hosted stack: Postgres, a one-off migration step, and the worker.
+# Secrets come from .env (never baked into the image).
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: bot
+      POSTGRES_PASSWORD: bot
+      POSTGRES_DB: x_niche_bot
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot -d x_niche_bot"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      target: build
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://bot:bot@db:5432/x_niche_bot?schema=public
+    depends_on:
+      db:
+        condition: service_healthy
+
+  bot:
+    build:
+      context: .
+      target: runtime
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://bot:bot@db:5432/x_niche_bot?schema=public
+      NODE_ENV: production
+    volumes:
+      # Edit niche configs without rebuilding the image.
+      - ./config:/app/config:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  db-data:

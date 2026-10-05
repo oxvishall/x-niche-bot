@@ -242,6 +242,28 @@ Key constraints:
 | `npm run job -- <name>` | Run one job once (`discovery`, `mentions`, `engagement`, `publishing`). |
 | `npm run review -- <command>` | Review drafted replies and posts (see [Review commands](#review-commands)). |
 
+## Docker
+
+`docker-compose.yml` runs three services:
+
+| Service | What it does |
+| --- | --- |
+| `db` | Postgres 17, with a named volume |
+| `migrate` | One-off `prisma migrate deploy` (build stage image) |
+| `bot` | The worker: production dependencies and compiled JS only, runs as the non-root `node` user |
+
+```bash
+cp .env.example .env            # fill in X + AI credentials; DATABASE_URL is set by compose
+docker compose up -d --build
+docker compose logs -f bot
+docker compose run --rm bot node dist/cli/review.js list      # review commands
+docker compose run --rm bot node dist/cli/run-job.js discovery
+```
+
+- `./config` is mounted read-only, so you can edit niche configs and restart without rebuilding.
+- Secrets are only read from `.env` at runtime and are never copied into the image (`.dockerignore` excludes `.env`).
+- **Not yet tested here, because Docker isn't installed on the development machine.** What was verified: the compiled worker, review CLI and job runner all run from a production-only `npm ci --omit=dev` install. That install also contains `prisma` and `typescript`, which come in as optional peer dependencies of `@prisma/client`; that's expected.
+
 ## Going live
 
 1. Create a niche config: copy `config/niches/example.json`, then fill in `searchQueries`, `voice`, `publishing.topics` and the `enabled` flags. Point `NICHE_CONFIG_PATH` at it.
