@@ -4,19 +4,15 @@ A reusable, configuration-driven bot for X (Twitter). Eventually it will discove
 
 It uses **only the official X API**. It has no browser automation, scraping, or cookie/session access.
 
-## Current scope: Phase 1 (foundation)
+## Status
 
-Built so far:
-
-- TypeScript + ESM project with build, typecheck and test tooling
-- Zod-validated environment variables (`src/config/env.ts`)
-- Zod-validated niche config schema and loader (`src/config/niche.schema.ts`)
-- Prisma schema for runs, discovered posts, engagements and published posts
-- `XClient` interface (`src/x/client.ts`), with no implementation yet
-- Pino logger that redacts secrets
-- Vitest tests for env validation, niche config and log redaction
-
-Not implemented yet: X search, replies, posting, AI generation, the scheduler/worker. Running the app now only validates config and exits.
+| Phase | Scope | Status |
+| --- | --- | --- |
+| 1 | Foundation: config, schema, logging, tooling | Done |
+| 2 | X API client, discovery, filtering, relevance scoring, persistence | Done |
+| 3 | AI replies, validation, dedup, rate limits, review queue | Planned |
+| 4 | Original post generation and publishing | Planned |
+| 5 | Scheduler/worker | Planned |
 
 ## Tech stack
 
@@ -30,13 +26,15 @@ prisma/schema.prisma  Database schema
 prisma.config.ts      Prisma CLI config (schema path, migrations, DATABASE_URL)
 src/
   config/             Env + niche config schemas and loaders
-  x/                  X API adapter (interface only in Phase 1)
-  discovery/          Search, normalization, relevance scoring       (Phase 2)
+  x/                  X API v2 client (OAuth 1.0a), dry-run wrapper, response mapping
+  discovery/          Query building, filters, relevance scoring, discovery engine
   engagement/         Reply generation, validation, review queue      (Phase 3)
   publishing/         Original post generation and publishing         (Phase 4)
   scheduler/          Job scheduling / worker                         (later)
   database/           Prisma client factory + repositories/
-  services/           Orchestration between layers                    (later)
+  services/           Job-level orchestration (discovery, run tracking)
+  cli/                Run-once job CLI
+  app.ts              Builds env, logger, DB, X client and repositories
   utils/              Logger and shared helpers
   types/              Platform-agnostic domain types
   generated/          Generated Prisma client (gitignored)
@@ -98,9 +96,33 @@ Each niche is a JSON file validated by `src/config/niche.schema.ts`:
 
 - `niche.name` is a slug that tags every database row, so several niches can share one database.
 - `engagement.mode` defaults to `review`: generated replies wait for human approval. X's automation rules restrict automated replies to posts found only through keyword search, so use `auto` only where the rules allow it.
-- Everything except `niche.name` has a safe default.
+- Everything except `niche.name` has a safe default. See `config/niches/example.json` for every option, including `search`, `filters` and `scoring`.
 
 To switch niches, create `config/niches/<your-niche>.json` and set `NICHE_CONFIG_PATH`.
+
+## Discovery and relevance
+
+Each discovery run does the following:
+1. Wraps every `searchQueries` entry with language and post-type operators. For example, `defi` becomes `(defi) lang:en -is:retweet -is:reply`.
+2. Uses the newest post ID from the previous run (`since_id`) so only new posts are fetched. On the first run it uses `SEARCH_LOOKBACK_MINUTES`.
+3. Removes posts already found by another query, then checks each post against the hard filters and the relevance score.
+4. Stores every post with its score breakdown, matched terms and filter reasons, so you can tune the config from real data.
+
+**Hard filters** (failing any one makes the post ineligible): own post, repost, reply, excluded author, language, excluded keyword, too new or too old, too short, too many hashtags or mentions, below the minimum engagement.
+
+**Relevance score** (0–1): a weighted average of five components. Weights are set in `scoring.weights`.
+
+| Component | Value |
+| --- | --- |
+| keyword | matched keywords ÷ `keywordSaturation`, capped at 1 |
+| hashtag | 1 if any configured hashtag is present |
+| author | 1 if the author is in `includeAuthors`. Ignored when that list is empty. |
+| engagement | log-scaled (likes + 2×replies + 3×reposts/quotes), full at `engagementTarget` |
+| recency | 1 at `minPostAgeMinutes`, falling linearly to 0 at `maxPostAgeMinutes` |
+
+A post is **eligible** when it passes every filter and scores at least `minimumRelevanceScore`. If you leave `keywords`/`hashtags` empty, they're taken from `searchQueries`.
+
+Run one discovery pass by hand: `npm run job -- discovery`. It needs the X credentials, even in dry-run mode, because search is a real API call.
 
 ## Local setup
 
@@ -122,7 +144,7 @@ docker run -d --name x-niche-bot-db -p 5432:5432 \
   -e POSTGRES_USER=bot -e POSTGRES_PASSWORD=bot -e POSTGRES_DB=x_niche_bot postgres:17
 # DATABASE_URL=postgresql://bot:bot@localhost:5432/x_niche_bot?schema=public
 
-npm run db:migrate          # creates and applies the initial migration
+npm run db:migrate          # applies migrations in prisma/migrations
 npm run db:studio           # browse data
 ```
 
@@ -144,11 +166,4 @@ Key constraints:
 | `npm run db:migrate` | Create/apply migrations (dev). |
 | `npm run db:generate` | Generate the Prisma client. |
 | `npm run db:studio` | Open Prisma Studio. |
-
-## Roadmap
-
-1. **Phase 1 (done):** foundation.
-2. **Phase 2:** X API client (official v2, OAuth 1.0a), discovery engine, normalization, relevance scoring and filters, persistence.
-3. **Phase 3:** AI provider abstraction, reply generation and validation, dedup, rate limiting, review queue and approval flow.
-4. **Phase 4:** original post generation and publishing.
-5. **Phase 5:** scheduler/worker, run tracking, deployment.
+| `npm run job -- <name>` | Run one job once (`discovery`). |
