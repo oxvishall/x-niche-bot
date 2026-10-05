@@ -10,7 +10,7 @@ const int = (min: number, max = Number.MAX_SAFE_INTEGER) =>
 
 const optionalSecret = z.string().min(1).optional();
 
-export const AI_PROVIDERS = ["none", "anthropic", "openai"] as const;
+export const AI_PROVIDERS = ["none", "anthropic"] as const;
 
 /** Names of env vars holding secrets. Used for log redaction. */
 export const SECRET_ENV_KEYS = [
@@ -64,6 +64,8 @@ export const envSchema = z
     AI_PROVIDER: z.enum(AI_PROVIDERS).default("none"),
     AI_API_KEY: optionalSecret,
     AI_MODEL: z.string().min(1).optional(),
+    /** Optional reasoning effort for providers that support it. */
+    AI_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
   })
   .superRefine((env, ctx) => {
     if (!env.DRY_RUN) {
