@@ -8,6 +8,8 @@ export type EngagementStatus =
   | "FAILED"
   | "SKIPPED";
 
+export type ReplyDelivery = "INTENT" | "API";
+
 /** Statuses that count as "we engaged (or will engage) with this author". */
 const ACTIVE_STATUSES: EngagementStatus[] = ["PENDING_REVIEW", "APPROVED", "POSTED"];
 
@@ -17,6 +19,7 @@ export interface NewEngagement {
   targetExternalId: string;
   targetAuthorId: string;
   status: EngagementStatus;
+  delivery: ReplyDelivery;
   dryRun: boolean;
   content?: string;
   contentHash?: string;
@@ -28,19 +31,30 @@ export interface NewEngagement {
 export interface EngagementView {
   id: string;
   status: EngagementStatus;
+  delivery: ReplyDelivery;
   content: string | null;
   targetExternalId: string;
   targetAuthorId: string;
   dryRun: boolean;
   createdAt: Date;
-  post: { text: string; authorUsername: string | null; relevanceScore: number | null };
+  post: {
+    text: string;
+    authorUsername: string | null;
+    relevanceScore: number | null;
+    origin: "SEARCH" | "MENTION";
+  };
 }
 
 export interface EngagementRepository {
   /** Returns null when the target already has an engagement (unique constraint). */
   create(input: NewEngagement): Promise<string | null>;
   get(id: string): Promise<EngagementView | null>;
-  list(niche: string, statuses: EngagementStatus[], limit: number): Promise<EngagementView[]>;
+  list(
+    niche: string,
+    statuses: EngagementStatus[],
+    limit: number,
+    delivery?: ReplyDelivery,
+  ): Promise<EngagementView[]>;
   countByStatus(niche: string, status: EngagementStatus): Promise<number>;
   /** Replies posted since `since` in the given mode (dry-run and live are counted separately). */
   countPostedSince(niche: string, since: Date, dryRun: boolean): Promise<number>;
@@ -56,23 +70,25 @@ export interface EngagementRepository {
 const VIEW_SELECT = {
   id: true,
   status: true,
+  delivery: true,
   content: true,
   targetExternalId: true,
   targetAuthorId: true,
   dryRun: true,
   createdAt: true,
-  discoveredPost: { select: { text: true, authorUsername: true, relevanceScore: true } },
+  discoveredPost: { select: { text: true, authorUsername: true, relevanceScore: true, origin: true } },
 } as const;
 
 type ViewRow = {
   id: string;
   status: EngagementStatus;
+  delivery: ReplyDelivery;
   content: string | null;
   targetExternalId: string;
   targetAuthorId: string;
   dryRun: boolean;
   createdAt: Date;
-  discoveredPost: { text: string; authorUsername: string | null; relevanceScore: number | null };
+  discoveredPost: EngagementView["post"];
 };
 
 function toView({ discoveredPost, ...row }: ViewRow): EngagementView {
@@ -104,9 +120,14 @@ export class PrismaEngagementRepository implements EngagementRepository {
     return row ? toView(row) : null;
   }
 
-  async list(niche: string, statuses: EngagementStatus[], limit: number): Promise<EngagementView[]> {
+  async list(
+    niche: string,
+    statuses: EngagementStatus[],
+    limit: number,
+    delivery?: ReplyDelivery,
+  ): Promise<EngagementView[]> {
     const rows = await this.prisma.engagement.findMany({
-      where: { niche, status: { in: statuses } },
+      where: { niche, status: { in: statuses }, ...(delivery && { delivery }) },
       orderBy: { createdAt: "asc" },
       take: limit,
       select: VIEW_SELECT,

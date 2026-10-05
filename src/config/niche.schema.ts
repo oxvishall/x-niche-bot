@@ -145,6 +145,22 @@ export const nicheConfigSchema = z
         similarityThreshold: ratio.default(0.6),
       })
       .prefault({}),
+    /**
+     * Replies to posts that @mention the bot. X's API allows these, so they
+     * are always delivered through the API (after review, unless mode is "auto").
+     */
+    mentions: z
+      .object({
+        enabled: z.boolean().default(false),
+        mode: z.enum(["review", "auto"]).default("review"),
+        /** Mentions fetched per run (X allows 5–100). */
+        maxResults: z.number().int().min(5).max(100).default(25),
+        maxDraftsPerRun: z.number().int().min(0).max(50).default(5),
+        maxRepliesPerAuthorPerDay: z.number().int().min(1).default(2),
+        /** Ignore mentions older than this. */
+        maxAgeHours: z.number().positive().max(168).default(24),
+      })
+      .prefault({}),
     publishing: z
       .object({
         enabled: z.boolean().default(false),

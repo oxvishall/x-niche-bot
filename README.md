@@ -1,6 +1,6 @@
 # x-niche-bot
 
-A reusable, configuration-driven bot for X (Twitter). It discovers posts in a niche, scores them for relevance, drafts replies for you to review, publishes original posts, and tracks everything in PostgreSQL. You switch niches by changing a config file, not code.
+A reusable, configuration-driven bot for X (Twitter). It discovers posts in a niche, scores them for relevance, drafts replies for you to review, answers mentions of your account, publishes original posts, and tracks everything in PostgreSQL. You switch niches by changing a config file, not code.
 
 It uses **only the official X API**. It has no browser automation, scraping, or cookie/session access.
 
@@ -25,14 +25,14 @@ prisma.config.ts      Prisma CLI config (schema path, migrations, DATABASE_URL)
 src/
   config/             Env + niche config schemas and loaders
   x/                  X API v2 client (OAuth 1.0a), dry-run wrapper, response mapping
-  discovery/          Query building, filters, relevance scoring, discovery engine
+  discovery/          Query building, filters, relevance scoring, search + mention discovery
   ai/                 AI provider interface + Anthropic implementation
   content/            Shared voice prompt and generated-text validation
   engagement/         Reply prompt, engagement engine, review commands
   publishing/         Post prompt, publishing engine, post review commands
   scheduler/          In-process scheduler, job list, Postgres worker lock
   database/           Prisma client factory + repositories/
-  services/           Job-level orchestration (discovery, engagement, publishing, run tracking)
+  services/           Job-level orchestration (discovery, mentions, engagement, publishing, run tracking)
   cli/                Run-once job CLI and review CLI
   app.ts              Builds env, logger, DB, X client and repositories
   utils/              Logger and shared helpers
@@ -91,6 +91,7 @@ Each niche is a JSON file validated by `src/config/niche.schema.ts`:
   },
   "targeting": { "includeAuthors": [], "excludeAuthors": [] },
   "engagement": { "enabled": false, "mode": "review", "delivery": "intent" },
+  "mentions": { "enabled": false, "mode": "review" },
   "publishing": { "enabled": false, "mode": "auto", "postsPerDay": 3, "topics": ["lending risk", "oracles"] }
 }
 ```
@@ -143,6 +144,15 @@ The engagement pipeline: **eligible post → per-author limit → AI draft → v
 
 `mode: "auto"` skips human review and requires `delivery: "api"`.
 
+### Mentions
+
+With `mentions.enabled`, each run also fetches posts that @mention your account (`GET /2/users/:id/mentions`, with a `since_id` cursor). **X's API still allows replying to these**, so mention replies are always posted by the bot through the API. With `mentions.mode: "review"` (the default) you approve them first; with `"auto"` they go out on the next run.
+
+- **Thread context:** if the mention is itself a reply, the parent post is fetched in the same request and shown to the model.
+- **Filters:** own posts, reposts, excluded authors, excluded keywords, and mentions older than `maxAgeHours`. Relevance scoring doesn't apply, because the person addressed you directly.
+- **Priority:** mentions are drafted before search replies, and both share the same hourly/daily reply caps and review queue. The per-author limit is `mentions.maxRepliesPerAuthorPerDay`.
+- If search later finds a post that's already stored as a mention, it only refreshes the metrics. The mention's eligibility and thread context are kept.
+
 ### Review commands
 
 ```bash
@@ -150,8 +160,8 @@ npm run review -- list                     # drafts waiting for review
 npm run review -- approve <id>             # approve as written
 npm run review -- approve <id> new text    # approve with your own edit
 npm run review -- reject <id>
-npm run review -- links                    # approved replies with intent links
-npm run review -- done <id> [reply url]    # mark as posted
+npm run review -- links                    # approved intent replies with links to post them
+npm run review -- done <id> [reply url]    # mark an intent reply as posted
 ```
 
 ## Publishing
@@ -176,7 +186,7 @@ With `mode: "review"`, drafts queue up (at most 3 at a time) and you approve the
 
 | Job | Interval | What it does |
 | --- | --- | --- |
-| `discover-and-engage` | `DISCOVERY_INTERVAL_MINUTES` | Discovery, then engagement: posts approved replies (API delivery) and drafts new ones. If discovery fails, engagement still runs on stored posts. |
+| `discover-and-engage` | `DISCOVERY_INTERVAL_MINUTES` | Search discovery, mention discovery, then engagement: posts approved API replies and drafts new ones. If either discovery step fails, engagement still runs on stored posts. |
 | `publish` | `PUBLISH_INTERVAL_MINUTES` | Publishes or drafts at most one original post. |
 
 - Both jobs run once at startup, then on their intervals. A job never overlaps itself, and a failed run is logged without stopping the worker.
@@ -229,14 +239,14 @@ Key constraints:
 | `npm run db:deploy` | Apply pending migrations (production/CI). |
 | `npm run db:generate` | Generate the Prisma client. |
 | `npm run db:studio` | Open Prisma Studio. |
-| `npm run job -- <name>` | Run one job once (`discovery`, `engagement`, `publishing`). |
+| `npm run job -- <name>` | Run one job once (`discovery`, `mentions`, `engagement`, `publishing`). |
 | `npm run review -- <command>` | Review drafted replies and posts (see [Review commands](#review-commands)). |
 
 ## Going live
 
 1. Create a niche config: copy `config/niches/example.json`, then fill in `searchQueries`, `voice`, `publishing.topics` and the `enabled` flags. Point `NICHE_CONFIG_PATH` at it.
 2. Fill in `.env` with the database, the four X credentials and the AI provider. Keep `DRY_RUN=true`.
-3. `npm run db:deploy`, then run each job once: `npm run job -- discovery`, `npm run job -- engagement`, `npm run job -- publishing`.
+3. `npm run db:deploy`, then run each job once: `npm run job -- discovery`, `npm run job -- mentions`, `npm run job -- engagement`, `npm run job -- publishing`.
 4. Check the results in `npm run db:studio`. `DiscoveredPost.filterReasons` and `scoreBreakdown` show why posts did or didn't qualify. Tune the queries, filters, weights and `minimumRelevanceScore` until the eligible posts look right.
 5. Read the drafts with `npm run review -- list` and `npm run review -- posts list`. Adjust `voice` until you'd post them yourself.
 6. Set `DRY_RUN=false` and start the worker with `npm start`.

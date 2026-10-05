@@ -5,8 +5,12 @@ import { validateContent, type ContentRules } from "../content/validate.js";
 import type {
   CandidatePost,
   DiscoveredPostRepository,
+  PostOrigin,
 } from "../database/repositories/discovered-post-repository.js";
-import type { EngagementRepository } from "../database/repositories/engagement-repository.js";
+import type {
+  EngagementRepository,
+  ReplyDelivery,
+} from "../database/repositories/engagement-repository.js";
 import { DAY_MS, effectiveLimit, HOUR_MS, remainingBudget } from "../utils/rate-limit.js";
 import type { XClient } from "../x/client.js";
 import { DRY_RUN_ID_PREFIX } from "../x/dry-run-client.js";
@@ -23,7 +27,7 @@ export interface EngagementEngineDeps {
   posts: DiscoveredPostRepository;
   engagements: EngagementRepository;
   logger: Logger;
-  /** Required only for API delivery. */
+  /** Required only to deliver API replies. */
   x?: XClient | null;
 }
 
@@ -44,67 +48,63 @@ export interface DeliveryStats {
   rateLimited: boolean;
 }
 
+/** Settings for one source of reply candidates (search results or mentions). */
+interface DraftSource {
+  origin: PostOrigin;
+  mode: "review" | "auto";
+  delivery: ReplyDelivery;
+  maxDraftsPerRun: number;
+  maxRepliesPerAuthorPerDay: number;
+  minScore: number;
+  postedAfter: Date;
+  postedBefore: Date;
+}
+
 const RECENT_CONTENT_WINDOW = 50;
 
 /**
- * Drafts replies for eligible posts and (for API delivery) posts approved
- * ones, enforcing per-author, hourly and daily limits.
+ * Drafts replies (to search results and to mentions) and posts approved API
+ * replies, enforcing per-author, hourly and daily limits.
  */
 export class EngagementEngine {
   constructor(private readonly deps: EngagementEngineDeps) {}
 
-  async draft(
+  /** Drafts replies to eligible posts found by search. */
+  draft(config: NicheConfig, limits: EngagementLimits, dryRun: boolean, now: Date = new Date()): Promise<DraftStats> {
+    const { engagement, filters, niche } = config;
+    return this.draftFrom(config, limits, dryRun, now, {
+      origin: "SEARCH",
+      mode: engagement.mode,
+      delivery: engagement.delivery === "api" ? "API" : "INTENT",
+      maxDraftsPerRun: engagement.maxDraftsPerRun,
+      maxRepliesPerAuthorPerDay: engagement.maxRepliesPerAuthorPerDay,
+      minScore: niche.minimumRelevanceScore,
+      postedAfter: new Date(now.getTime() - filters.maxPostAgeMinutes * 60_000),
+      postedBefore: new Date(now.getTime() - filters.minPostAgeMinutes * 60_000),
+    });
+  }
+
+  /** Drafts replies to posts that mention the bot. These are always delivered via the API. */
+  draftMentions(
     config: NicheConfig,
     limits: EngagementLimits,
     dryRun: boolean,
     now: Date = new Date(),
   ): Promise<DraftStats> {
-    const { engagement, filters, niche } = config;
-    const { engagements, logger } = this.deps;
-    const stats: DraftStats = { candidates: 0, drafted: 0, skipped: 0, invalid: 0, authorLimited: 0, budget: 0 };
-
-    stats.budget = await this.draftBudget(config, limits, dryRun, now);
-    if (stats.budget === 0) {
-      logger.info({ niche: niche.name }, "No drafting budget left this run");
-      return stats;
-    }
-
-    const candidates = await this.deps.posts.findCandidates({
-      niche: niche.name,
-      minScore: niche.minimumRelevanceScore,
-      postedAfter: new Date(now.getTime() - filters.maxPostAgeMinutes * 60_000),
-      postedBefore: new Date(now.getTime() - filters.minPostAgeMinutes * 60_000),
-      limit: stats.budget * 3,
+    const { mentions } = config;
+    return this.draftFrom(config, limits, dryRun, now, {
+      origin: "MENTION",
+      mode: mentions.mode,
+      delivery: "API",
+      maxDraftsPerRun: mentions.maxDraftsPerRun,
+      maxRepliesPerAuthorPerDay: mentions.maxRepliesPerAuthorPerDay,
+      minScore: 0,
+      postedAfter: new Date(now.getTime() - mentions.maxAgeHours * HOUR_MS),
+      postedBefore: now,
     });
-    stats.candidates = candidates.length;
-
-    const recent = await engagements.recentContents(niche.name, RECENT_CONTENT_WINDOW);
-    const draftedAuthors = new Map<string, number>();
-
-    for (const candidate of candidates) {
-      if (stats.drafted >= stats.budget) break;
-
-      const authorCount =
-        (draftedAuthors.get(candidate.authorId) ?? 0) +
-        (await engagements.countForAuthorSince(candidate.authorId, new Date(now.getTime() - DAY_MS)));
-      if (authorCount >= engagement.maxRepliesPerAuthorPerDay) {
-        stats.authorLimited++;
-        continue;
-      }
-
-      const outcome = await this.draftOne(config, candidate, recent, dryRun);
-      if (outcome === "stop") break;
-      stats[outcome]++;
-      if (outcome === "drafted") {
-        draftedAuthors.set(candidate.authorId, (draftedAuthors.get(candidate.authorId) ?? 0) + 1);
-      }
-    }
-
-    logger.info({ niche: niche.name, ...stats }, "Reply drafting finished");
-    return stats;
   }
 
-  /** Posts approved replies through the X API (delivery "api" only). */
+  /** Posts approved API replies (search replies with delivery "api", and mention replies). */
   async deliver(
     config: NicheConfig,
     limits: EngagementLimits,
@@ -114,11 +114,14 @@ export class EngagementEngine {
     const { engagements, logger, x } = this.deps;
     const niche = config.niche.name;
     const stats: DeliveryStats = { attempted: 0, posted: 0, failed: 0, budget: 0, rateLimited: false };
-    if (config.engagement.delivery !== "api") return stats;
-    if (!x) throw new Error("API delivery requires X credentials");
 
     stats.budget = await this.postingBudget(config, limits, dryRun, now);
-    const approved = await engagements.list(niche, ["APPROVED"], stats.budget);
+    const approved = await engagements.list(niche, ["APPROVED"], stats.budget, "API");
+    if (approved.length === 0) return stats;
+    if (!x) {
+      logger.warn({ waiting: approved.length }, "Approved API replies are waiting, but X credentials are not configured");
+      return stats;
+    }
 
     for (const item of approved) {
       stats.attempted++;
@@ -137,7 +140,7 @@ export class EngagementEngine {
           continue;
         }
         const message =
-          error instanceof XApiError && error.status === 403
+          error instanceof XApiError && error.status === 403 && item.post.origin === "SEARCH"
             ? `${error.message}. X only allows API replies when the author mentioned or quoted you (unless you have Enterprise access); consider delivery "intent".`
             : error instanceof Error
               ? error.message
@@ -152,11 +155,65 @@ export class EngagementEngine {
     return stats;
   }
 
+  private async draftFrom(
+    config: NicheConfig,
+    limits: EngagementLimits,
+    dryRun: boolean,
+    now: Date,
+    source: DraftSource,
+  ): Promise<DraftStats> {
+    const { engagements, logger } = this.deps;
+    const niche = config.niche.name;
+    const stats: DraftStats = { candidates: 0, drafted: 0, skipped: 0, invalid: 0, authorLimited: 0, budget: 0 };
+
+    stats.budget = await this.draftBudget(config, limits, dryRun, now, source);
+    if (stats.budget === 0) {
+      logger.info({ niche, origin: source.origin }, "No drafting budget left this run");
+      return stats;
+    }
+
+    const candidates = await this.deps.posts.findCandidates({
+      niche,
+      origin: source.origin,
+      minScore: source.minScore,
+      postedAfter: source.postedAfter,
+      postedBefore: source.postedBefore,
+      limit: stats.budget * 3,
+    });
+    stats.candidates = candidates.length;
+
+    const recent = await engagements.recentContents(niche, RECENT_CONTENT_WINDOW);
+    const draftedAuthors = new Map<string, number>();
+
+    for (const candidate of candidates) {
+      if (stats.drafted >= stats.budget) break;
+
+      const authorCount =
+        (draftedAuthors.get(candidate.authorId) ?? 0) +
+        (await engagements.countForAuthorSince(candidate.authorId, new Date(now.getTime() - DAY_MS)));
+      if (authorCount >= source.maxRepliesPerAuthorPerDay) {
+        stats.authorLimited++;
+        continue;
+      }
+
+      const outcome = await this.draftOne(config, candidate, recent, dryRun, source);
+      if (outcome === "stop") break;
+      stats[outcome]++;
+      if (outcome === "drafted") {
+        draftedAuthors.set(candidate.authorId, (draftedAuthors.get(candidate.authorId) ?? 0) + 1);
+      }
+    }
+
+    logger.info({ niche, origin: source.origin, ...stats }, "Reply drafting finished");
+    return stats;
+  }
+
   private async draftOne(
     config: NicheConfig,
     candidate: CandidatePost,
     recent: string[],
     dryRun: boolean,
+    source: DraftSource,
   ): Promise<"drafted" | "skipped" | "invalid" | "stop"> {
     const { ai, engagements, logger } = this.deps;
     const { engagement, voice, niche } = config;
@@ -165,6 +222,7 @@ export class EngagementEngine {
       discoveredPostId: candidate.id,
       targetExternalId: candidate.externalId,
       targetAuthorId: candidate.authorId,
+      delivery: source.delivery,
       dryRun,
     };
     const rules: ContentRules = {
@@ -182,7 +240,11 @@ export class EngagementEngine {
     let model: string | undefined;
     // One retry, telling the model what was wrong with the first attempt.
     for (let attempt = 0; attempt < 2; attempt++) {
-      const request = buildReplyPrompt(config, candidate, recent);
+      const request = buildReplyPrompt(
+        config,
+        { ...candidate, kind: source.origin === "MENTION" ? "mention" : "search" },
+        recent,
+      );
       if (issues.length) {
         request.prompt += `\n\nYour previous draft was rejected for: ${issues.join(", ")}. Write a different reply that avoids these problems, or output SKIP.`;
       }
@@ -209,7 +271,7 @@ export class EngagementEngine {
       if (result.status === "ok") {
         const id = await engagements.create({
           ...base,
-          status: engagement.mode === "auto" ? "APPROVED" : "PENDING_REVIEW",
+          status: source.mode === "auto" ? "APPROVED" : "PENDING_REVIEW",
           content: result.text,
           contentHash: result.hash,
           ...(model && { aiModel: model }),
@@ -224,21 +286,22 @@ export class EngagementEngine {
     return "invalid";
   }
 
-  /** Auto mode: bounded by the posting budget. Review mode: by the review queue size. */
+  /** Auto mode: bounded by the posting budget. Review mode: by the shared review queue. */
   private async draftBudget(
     config: NicheConfig,
     limits: EngagementLimits,
     dryRun: boolean,
     now: Date,
+    source: DraftSource,
   ): Promise<number> {
-    const { engagement, niche } = config;
-    if (engagement.mode === "auto") {
-      const approved = await this.deps.engagements.countByStatus(niche.name, "APPROVED");
+    const niche = config.niche.name;
+    if (source.mode === "auto") {
+      const waiting = (await this.deps.engagements.list(niche, ["APPROVED"], 1000, "API")).length;
       const budget = await this.postingBudget(config, limits, dryRun, now);
-      return Math.min(engagement.maxDraftsPerRun, Math.max(0, budget - approved));
+      return Math.min(source.maxDraftsPerRun, Math.max(0, budget - waiting));
     }
-    const pending = await this.deps.engagements.countByStatus(niche.name, "PENDING_REVIEW");
-    return Math.min(engagement.maxDraftsPerRun, Math.max(0, engagement.maxPendingReviews - pending));
+    const pending = await this.deps.engagements.countByStatus(niche, "PENDING_REVIEW");
+    return Math.min(source.maxDraftsPerRun, Math.max(0, config.engagement.maxPendingReviews - pending));
   }
 
   private async postingBudget(

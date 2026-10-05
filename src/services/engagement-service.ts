@@ -3,25 +3,22 @@ import { EngagementEngine, type DeliveryStats, type DraftStats } from "../engage
 import { withBotRun } from "./run-tracker.js";
 
 export interface EngagementRunStats {
-  draft: DraftStats;
   delivery: DeliveryStats;
+  search: DraftStats | null;
+  mentions: DraftStats | null;
 }
 
-/** Drafts replies for eligible posts, then delivers approved ones (API delivery only). */
+/** Delivers approved API replies, then drafts replies to search results and mentions. */
 export async function runEngagement(app: App): Promise<EngagementRunStats | null> {
   const { env, niche, ai, x, repos } = app;
   const logger = app.logger.child({ job: "engagement" });
 
-  if (!niche.engagement.enabled) {
-    logger.debug("Engagement is disabled for this niche");
+  if (!niche.engagement.enabled && !niche.mentions.enabled) {
+    logger.debug("Engagement and mentions are disabled for this niche");
     return null;
   }
   if (!ai) {
     logger.warn("AI_PROVIDER is none; cannot draft replies");
-    return null;
-  }
-  if (niche.engagement.delivery === "api" && !x) {
-    logger.warn('Delivery "api" needs X credentials; skipping engagement');
     return null;
   }
 
@@ -34,8 +31,10 @@ export async function runEngagement(app: App): Promise<EngagementRunStats | null
     async () => {
       // Deliver first so approved replies don't wait behind new drafts for budget.
       const delivery = await engine.deliver(niche, limits, env.DRY_RUN);
-      const draft = await engine.draft(niche, limits, env.DRY_RUN);
-      return { draft, delivery };
+      // Mentions first: people who addressed the bot directly get priority for the shared budget.
+      const mentions = niche.mentions.enabled ? await engine.draftMentions(niche, limits, env.DRY_RUN) : null;
+      const search = niche.engagement.enabled ? await engine.draft(niche, limits, env.DRY_RUN) : null;
+      return { delivery, mentions, search };
     },
   );
 }

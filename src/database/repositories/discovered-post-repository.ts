@@ -2,10 +2,16 @@ import type { PrismaClient } from "../../generated/prisma/client.js";
 import type { PostEvaluation } from "../../discovery/relevance.js";
 import type { NormalizedPost } from "../../types/index.js";
 
+export type PostOrigin = "SEARCH" | "MENTION";
+
 export interface EvaluatedPost {
   post: NormalizedPost;
   evaluation: PostEvaluation;
   searchRunId?: string;
+  /** Defaults to SEARCH. */
+  origin?: PostOrigin;
+  /** Text of the post this one replies to (thread context). */
+  parentText?: string;
 }
 
 export interface UpsertResult {
@@ -22,6 +28,7 @@ export interface CandidatePost {
   text: string;
   lang: string | null;
   conversationId: string | null;
+  parentText: string | null;
   postedAt: Date;
   relevanceScore: number;
   matchedKeywords: string[];
@@ -30,6 +37,7 @@ export interface CandidatePost {
 
 export interface FindCandidatesInput {
   niche: string;
+  origin: PostOrigin;
   minScore: number;
   postedAfter: Date;
   postedBefore: Date;
@@ -41,15 +49,18 @@ export interface DiscoveredPostRepository {
   upsertMany(niche: string, items: EvaluatedPost[]): Promise<UpsertResult>;
   /** Eligible posts with no engagement yet, best score first. */
   findCandidates(input: FindCandidatesInput): Promise<CandidatePost[]>;
-  /** Texts of the highest-scoring eligible posts since `since` (engaged or not). */
+  /** Texts of the highest-scoring eligible search posts since `since` (engaged or not). */
   findTopTexts(niche: string, since: Date, limit: number): Promise<string[]>;
 }
 
-function toRow(niche: string, { post, evaluation, searchRunId }: EvaluatedPost) {
+function toRow(niche: string, { post, evaluation, searchRunId, origin, parentText }: EvaluatedPost) {
   return {
     platform: post.platform,
     externalId: post.id,
     niche,
+    origin: origin ?? "SEARCH",
+    inReplyToPostId: post.inReplyToPostId ?? null,
+    parentText: parentText ?? null,
     searchRunId: searchRunId ?? null,
     authorId: post.authorId,
     authorUsername: post.author?.username ?? null,
@@ -81,9 +92,9 @@ export class PrismaDiscoveredPostRepository implements DiscoveredPostRepository 
 
     const existing = await this.prisma.discoveredPost.findMany({
       where: { niche, platform: "X", externalId: { in: items.map((i) => i.post.id) } },
-      select: { externalId: true },
+      select: { externalId: true, origin: true },
     });
-    const known = new Set(existing.map((e) => e.externalId));
+    const known = new Map(existing.map((e) => [e.externalId, e.origin]));
     const fresh = items.filter((i) => !known.has(i.post.id));
     const stale = items.filter((i) => known.has(i.post.id));
 
@@ -94,10 +105,23 @@ export class PrismaDiscoveredPostRepository implements DiscoveredPostRepository 
 
     await this.prisma.$transaction(
       stale.map((item) => {
-        const { platform, externalId, niche: _niche, searchRunId: _run, ...data } = toRow(niche, item);
+        const row = toRow(niche, item);
+        const { platform, externalId, niche: _niche, searchRunId: _run, origin, parentText, ...data } = row;
+        const where = { platform_externalId_niche: { platform, externalId, niche } };
+
+        // A mention re-found by search keeps its mention evaluation and thread
+        // context; only the engagement metrics are refreshed.
+        if (known.get(externalId) === "MENTION" && origin === "SEARCH") {
+          const { likeCount, replyCount, repostCount, quoteCount } = row;
+          return this.prisma.discoveredPost.update({
+            where,
+            data: { likeCount, replyCount, repostCount, quoteCount },
+          });
+        }
         return this.prisma.discoveredPost.update({
-          where: { platform_externalId_niche: { platform, externalId, niche } },
-          data,
+          where,
+          // A post later seen as a mention becomes a mention; never the reverse.
+          data: { ...data, origin, ...(parentText !== null && { parentText }) },
         });
       }),
     );
@@ -109,6 +133,7 @@ export class PrismaDiscoveredPostRepository implements DiscoveredPostRepository 
     const rows = await this.prisma.discoveredPost.findMany({
       where: {
         niche: input.niche,
+        origin: input.origin,
         eligible: true,
         relevanceScore: { gte: input.minScore },
         postedAt: { gte: input.postedAfter, lte: input.postedBefore },
@@ -124,6 +149,7 @@ export class PrismaDiscoveredPostRepository implements DiscoveredPostRepository 
         text: true,
         lang: true,
         conversationId: true,
+        parentText: true,
         postedAt: true,
         relevanceScore: true,
         matchedKeywords: true,
@@ -135,7 +161,7 @@ export class PrismaDiscoveredPostRepository implements DiscoveredPostRepository 
 
   async findTopTexts(niche: string, since: Date, limit: number): Promise<string[]> {
     const rows = await this.prisma.discoveredPost.findMany({
-      where: { niche, eligible: true, postedAt: { gte: since } },
+      where: { niche, origin: "SEARCH", eligible: true, postedAt: { gte: since } },
       orderBy: { relevanceScore: "desc" },
       take: limit,
       select: { text: true },

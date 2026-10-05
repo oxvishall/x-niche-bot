@@ -54,6 +54,14 @@
     "allowLinks": false,
     "similarityThreshold": 0.6
   },
+  "mentions": {
+    "enabled": false,
+    "mode": "review",
+    "maxResults": 25,
+    "maxDraftsPerRun": 5,
+    "maxRepliesPerAuthorPerDay": 2,
+    "maxAgeHours": 24
+  },
   "publishing": {
     "enabled": false,
     "mode": "auto",

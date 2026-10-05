@@ -8,8 +8,8 @@ export const REVIEW_USAGE = `Usage: npm run review -- <command>
   list [limit]                 Drafts waiting for review
   approve <id> [edited text]   Approve a draft, optionally replacing its text
   reject <id>                  Reject a draft
-  links                        Approved replies with X intent links to post them yourself
-  done <id> [reply url or id]  Mark an approved reply as posted (intent delivery)
+  links                        Approved intent replies with X links to post them yourself
+  done <id> [reply url or id]  Mark an approved intent reply as posted
   posts <command>              Review original post drafts (see: npm run review -- posts)`;
 
 function excerpt(text: string, max = 160): string {
@@ -19,7 +19,7 @@ function excerpt(text: string, max = 160): string {
 
 function describe(item: EngagementView): string[] {
   return [
-    `[${item.id}] score ${item.post.relevanceScore?.toFixed(2) ?? "-"}  @${item.post.authorUsername ?? item.targetAuthorId}`,
+    `[${item.id}] ${item.post.origin === "MENTION" ? "mention" : `score ${item.post.relevanceScore?.toFixed(2) ?? "-"}`}  @${item.post.authorUsername ?? item.targetAuthorId}  (${item.delivery === "API" ? "posted by the bot" : "you post it"})`,
     `  post:  ${excerpt(item.post.text)}`,
     `  url:   ${postUrl(item.targetExternalId, item.post.authorUsername)}`,
     `  reply: ${item.content ?? "(none)"}`,
@@ -68,7 +68,7 @@ export async function runReviewCommand(
       }
 
       const text = edited || item.content!;
-      return config.engagement.delivery === "intent"
+      return item.delivery === "INTENT"
         ? [`Approved ${item.id}. Post it yourself:`, `  ${replyIntentUrl(item.targetExternalId, text)}`, `Then run: npm run review -- done ${item.id}`]
         : [`Approved ${item.id}. It will be posted by the next engagement run.`];
     }
@@ -83,8 +83,8 @@ export async function runReviewCommand(
     }
 
     case "links": {
-      const items = await engagements.list(niche, ["APPROVED"], 50);
-      if (!items.length) return ["No approved replies waiting to be posted."];
+      const items = await engagements.list(niche, ["APPROVED"], 50, "INTENT");
+      if (!items.length) return ["No approved replies waiting for you to post."];
       return items.flatMap((item) => [
         ...describe(item),
         `  post it: ${replyIntentUrl(item.targetExternalId, item.content!)}`,
@@ -94,7 +94,9 @@ export async function runReviewCommand(
 
     case "done": {
       const item = id ? await engagements.get(id) : null;
-      if (!item || item.status !== "APPROVED") return [`No approved reply with id ${id ?? "(missing)"}.`];
+      if (!item || item.status !== "APPROVED" || item.delivery !== "INTENT") {
+        return [`No approved intent reply with id ${id ?? "(missing)"}.`];
+      }
       const replyId = rest[0] ? parsePostId(rest[0]) : null;
       if (rest[0] && !replyId) return [`Could not read a post ID from "${rest[0]}".`];
       await engagements.markPosted(item.id, replyId);

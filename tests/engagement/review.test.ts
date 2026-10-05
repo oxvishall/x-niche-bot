@@ -13,6 +13,7 @@ async function setup(delivery: "intent" | "api" = "intent") {
     targetExternalId: "1234567890",
     targetAuthorId: "a1",
     status: "PENDING_REVIEW",
+    delivery: delivery === "api" ? "API" : "INTENT",
     dryRun: false,
     content: "How do you handle oracle lag?",
   }))!;

@@ -75,6 +75,7 @@ describe("PrismaDiscoveredPostRepository", () => {
     ]);
     const input = {
       niche: NICHE,
+      origin: "SEARCH" as const,
       minScore: 0.4,
       postedAfter: minutesAgo(600),
       postedBefore: new Date(),
@@ -91,10 +92,55 @@ describe("PrismaDiscoveredPostRepository", () => {
       targetExternalId: candidates[0]!.externalId,
       targetAuthorId: candidates[0]!.authorId,
       status: "SKIPPED",
+      delivery: "INTENT",
       dryRun: true,
     });
     expect((await posts.findCandidates(input)).map((c) => c.externalId)).toEqual([candidates[1]!.externalId]);
     expect(await posts.findTopTexts(NICHE, minutesAgo(600), 5)).toHaveLength(2);
+  });
+});
+
+describe("mentions in PrismaDiscoveredPostRepository", () => {
+  it("upgrades a search post to a mention, never the reverse, and filters candidates by origin", async () => {
+    // A reply fails search filters but is a valid mention.
+    const post = makePost({ id: "1", text: ON_TOPIC, createdAt: minutesAgo(30), inReplyToPostId: "0" });
+    const asMention = { ...evaluated(post), origin: "MENTION" as const, parentText: "parent" };
+    asMention.evaluation = { ...asMention.evaluation, eligible: true, passedFilters: true, filterReasons: [] };
+
+    await posts.upsertMany(NICHE, [evaluated(post)]);
+    await posts.upsertMany(NICHE, [asMention]);
+    const busier = { ...post, metrics: { ...post.metrics, likes: 99 } };
+    await posts.upsertMany(NICHE, [evaluated(busier)]);
+
+    const row = await prisma.discoveredPost.findFirstOrThrow({ where: { externalId: "1" } });
+    expect(row).toMatchObject({
+      origin: "MENTION",
+      parentText: "parent",
+      inReplyToPostId: "0",
+      eligible: true,
+      filterReasons: [],
+      likeCount: 99,
+    });
+
+    const input = { niche: NICHE, minScore: 0, postedAfter: minutesAgo(600), postedBefore: new Date(), limit: 10 };
+    expect(await posts.findCandidates({ ...input, origin: "SEARCH" })).toEqual([]);
+    const [candidate] = await posts.findCandidates({ ...input, origin: "MENTION" });
+    expect(candidate).toMatchObject({ externalId: "1", parentText: "parent" });
+    expect(await posts.findTopTexts(NICHE, minutesAgo(600), 5)).toEqual([]);
+
+    await engagements.create({
+      niche: NICHE,
+      discoveredPostId: candidate!.id,
+      targetExternalId: "1",
+      targetAuthorId: candidate!.authorId,
+      status: "APPROVED",
+      delivery: "API",
+      dryRun: true,
+      content: "reply",
+    });
+    expect(await engagements.list(NICHE, ["APPROVED"], 10, "API")).toHaveLength(1);
+    expect(await engagements.list(NICHE, ["APPROVED"], 10, "INTENT")).toHaveLength(0);
+    expect((await engagements.list(NICHE, ["APPROVED"], 10))[0]!.post.origin).toBe("MENTION");
   });
 });
 
@@ -106,7 +152,7 @@ describe("PrismaEngagementRepository", () => {
 
   it("refuses a second engagement for the same post", async () => {
     const post = await seedPost("1");
-    const base = { niche: NICHE, discoveredPostId: post.id, targetExternalId: "1", targetAuthorId: "a1", dryRun: true };
+    const base = { niche: NICHE, discoveredPostId: post.id, targetExternalId: "1", targetAuthorId: "a1", delivery: "INTENT" as const, dryRun: true };
     expect(await engagements.create({ ...base, status: "PENDING_REVIEW", content: "first" })).toEqual(expect.any(String));
     expect(await engagements.create({ ...base, status: "PENDING_REVIEW", content: "second" })).toBeNull();
   });
@@ -119,6 +165,7 @@ describe("PrismaEngagementRepository", () => {
       targetExternalId: "1",
       targetAuthorId: "a1",
       status: "PENDING_REVIEW",
+      delivery: "INTENT",
       dryRun: false,
       content: "How do you size liquidation buffers?",
       contentHash: "h1",
@@ -149,6 +196,7 @@ describe("PrismaEngagementRepository", () => {
         targetExternalId: id,
         targetAuthorId: `a${id}`,
         status: "APPROVED",
+        delivery: "API",
         dryRun: true,
         content: `reply ${id}`,
       }))!;

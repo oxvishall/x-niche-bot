@@ -10,6 +10,7 @@ import type {
   EngagementStatus,
   EngagementView,
   NewEngagement,
+  ReplyDelivery,
 } from "../src/database/repositories/engagement-repository.js";
 import type {
   NewPublishedPost,
@@ -65,9 +66,23 @@ export class InMemoryDiscoveredPostRepository implements DiscoveredPostRepositor
     for (const item of items) {
       const key = `${niche}:${item.post.id}`;
       const existing = this.rows.get(key);
+      if (existing?.origin === "MENTION" && (item.origin ?? "SEARCH") === "SEARCH") {
+        existing.post = { ...existing.post, metrics: item.post.metrics };
+        updated++;
+        continue;
+      }
       if (existing) updated++;
       else created++;
-      this.rows.set(key, { ...item, id: existing?.id ?? `dp-${item.post.id}`, niche, engaged: existing?.engaged ?? false });
+      const origin = item.origin ?? "SEARCH";
+      const parentText = item.parentText ?? existing?.parentText;
+      this.rows.set(key, {
+        ...item,
+        origin,
+        ...(parentText !== undefined && { parentText }),
+        id: existing?.id ?? `dp-${item.post.id}`,
+        niche,
+        engaged: existing?.engaged ?? false,
+      });
     }
     return { created, updated };
   }
@@ -77,6 +92,7 @@ export class InMemoryDiscoveredPostRepository implements DiscoveredPostRepositor
       .filter(
         (r) =>
           r.niche === input.niche &&
+          (r.origin ?? "SEARCH") === input.origin &&
           !r.engaged &&
           r.evaluation.eligible &&
           r.evaluation.score >= input.minScore &&
@@ -93,6 +109,7 @@ export class InMemoryDiscoveredPostRepository implements DiscoveredPostRepositor
         text: r.post.text,
         lang: r.post.lang ?? null,
         conversationId: r.post.conversationId ?? null,
+        parentText: r.parentText ?? null,
         postedAt: r.post.createdAt,
         relevanceScore: r.evaluation.score,
         matchedKeywords: r.evaluation.matchedKeywords,
@@ -102,7 +119,7 @@ export class InMemoryDiscoveredPostRepository implements DiscoveredPostRepositor
 
   async findTopTexts(niche: string, since: Date, limit: number): Promise<string[]> {
     return [...this.rows.values()]
-      .filter((r) => r.niche === niche && r.evaluation.eligible && r.post.createdAt >= since)
+      .filter((r) => r.niche === niche && (r.origin ?? "SEARCH") === "SEARCH" && r.evaluation.eligible && r.post.createdAt >= since)
       .sort((a, b) => b.evaluation.score - a.evaluation.score)
       .slice(0, limit)
       .map((r) => r.post.text);
@@ -133,6 +150,7 @@ export class InMemoryEngagementRepository implements EngagementRepository {
     return {
       id: r.id,
       status: r.status,
+      delivery: r.delivery,
       content: r.content ?? null,
       targetExternalId: r.targetExternalId,
       targetAuthorId: r.targetAuthorId,
@@ -142,6 +160,7 @@ export class InMemoryEngagementRepository implements EngagementRepository {
         text: post?.post.text ?? "",
         authorUsername: post?.post.author?.username ?? null,
         relevanceScore: post?.evaluation.score ?? null,
+        origin: post?.origin ?? "SEARCH",
       },
     };
   }
@@ -151,8 +170,11 @@ export class InMemoryEngagementRepository implements EngagementRepository {
     return row ? this.view(row) : null;
   }
 
-  async list(niche: string, statuses: EngagementStatus[], limit: number) {
-    return this.rows.filter((r) => r.niche === niche && statuses.includes(r.status)).slice(0, limit).map((r) => this.view(r));
+  async list(niche: string, statuses: EngagementStatus[], limit: number, delivery?: ReplyDelivery) {
+    return this.rows
+      .filter((r) => r.niche === niche && statuses.includes(r.status) && (!delivery || r.delivery === delivery))
+      .slice(0, limit)
+      .map((r) => this.view(r));
   }
 
   async countByStatus(niche: string, status: EngagementStatus) {
