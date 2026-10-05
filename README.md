@@ -6,7 +6,11 @@ It uses **only the official X API**. It has no browser automation, scraping, or 
 
 ## Status
 
-All five phases are built: foundation, discovery, replies, publishing, and the scheduler/worker. Everything is covered by unit tests with mocked X and AI calls. It has **not yet been run against a real database, X account or AI key**, so do the first live run with `DRY_RUN=true` (see [Going live](#going-live)).
+All five phases are built: foundation, discovery, replies, publishing, and the scheduler/worker.
+- Unit tests mock the X and AI calls.
+- Integration tests run the real migrations, repositories, worker lock and a full discover → draft → review → publish pipeline against a throwaway Postgres.
+
+It has **not yet been run against a real X account or AI key**, so do the first live run with `DRY_RUN=true` (see [Going live](#going-live)).
 
 ## Tech stack
 
@@ -35,7 +39,7 @@ src/
   types/              Platform-agnostic domain types
   generated/          Generated Prisma client (gitignored)
   index.ts            Worker entry point
-tests/                Vitest tests
+tests/                Vitest unit tests; tests/integration/ runs against an embedded Postgres
 ```
 
 ## Environment variables
@@ -217,7 +221,8 @@ Key constraints:
 | `npm run dev` | Run the worker from source with watch mode (tsx). |
 | `npm run build` | Compile to `dist/`. |
 | `npm run start` | Run the compiled worker. |
-| `npm test` | Run tests once. |
+| `npm test` | Run unit tests once. |
+| `npm run test:integration` | Run integration tests against an embedded Postgres (downloads nothing at runtime; the binary comes with the `embedded-postgres` dev dependency). |
 | `npm run test:watch` | Run tests in watch mode. |
 | `npm run typecheck` | Type-check src and tests. |
 | `npm run db:migrate` | Create/apply migrations (dev). |
