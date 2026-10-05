@@ -11,7 +11,7 @@ It uses **only the official X API**. It has no browser automation, scraping, or 
 | 1 | Foundation: config, schema, logging, tooling | Done |
 | 2 | X API client, discovery, filtering, relevance scoring, persistence | Done |
 | 3 | AI replies, validation, dedup, rate limits, review queue | Done |
-| 4 | Original post generation and publishing | Planned |
+| 4 | Original post generation and publishing | Done |
 | 5 | Scheduler/worker | Planned |
 
 ## Tech stack
@@ -31,10 +31,10 @@ src/
   ai/                 AI provider interface + Anthropic implementation
   content/            Shared voice prompt and generated-text validation
   engagement/         Reply prompt, engagement engine, review commands
-  publishing/         Original post generation and publishing         (Phase 4)
+  publishing/         Post prompt, publishing engine, post review commands
   scheduler/          Job scheduling / worker                         (later)
   database/           Prisma client factory + repositories/
-  services/           Job-level orchestration (discovery, engagement, run tracking)
+  services/           Job-level orchestration (discovery, engagement, publishing, run tracking)
   cli/                Run-once job CLI and review CLI
   app.ts              Builds env, logger, DB, X client and repositories
   utils/              Logger and shared helpers
@@ -93,7 +93,7 @@ Each niche is a JSON file validated by `src/config/niche.schema.ts`:
   },
   "targeting": { "includeAuthors": [], "excludeAuthors": [] },
   "engagement": { "enabled": false, "mode": "review", "delivery": "intent" },
-  "publishing": { "enabled": false, "postsPerDay": 0 }
+  "publishing": { "enabled": false, "mode": "auto", "postsPerDay": 3, "topics": ["lending risk", "oracles"] }
 }
 ```
 
@@ -156,6 +156,22 @@ npm run review -- links                    # approved replies with intent links
 npm run review -- done <id> [reply url]    # mark as posted
 ```
 
+## Publishing
+
+Posting your own content through the API is still allowed, so publishing defaults to `mode: "auto"`. `DRY_RUN=true` still blocks real posting. In a dry run, posts are generated and stored without X credentials.
+
+Each publishing run posts **at most one** post, and only when all of these hold:
+- fewer than `min(postsPerDay, MAX_POSTS_PER_DAY)` posts in the last 24 hours
+- at least `minMinutesBetweenPosts` since the last post
+- the current hour is inside `activeHours` (optional, timezone-aware, can wrap past midnight)
+
+How a post is written:
+- **Topic:** the least recently used entry in `publishing.topics`, so topics rotate.
+- **Context:** with `useDiscoveredContext`, the 5 highest-scoring posts discovered in the last 24 hours go into the prompt so the post is timely. They're marked as context only, and validation rejects anything too similar to them, so the bot can't copy them.
+- **Validation:** the same checks as replies (length, links, hashtags, banned phrases, duplicates), compared against the bot's last 50 posts.
+
+With `mode: "review"`, drafts queue up (at most 3 at a time) and you approve them with `npm run review -- posts list | approve <id> [edit] | reject <id>`. The next publishing run posts approved drafts.
+
 ## Local setup
 
 ```bash
@@ -198,5 +214,5 @@ Key constraints:
 | `npm run db:migrate` | Create/apply migrations (dev). |
 | `npm run db:generate` | Generate the Prisma client. |
 | `npm run db:studio` | Open Prisma Studio. |
-| `npm run job -- <name>` | Run one job once (`discovery`, `engagement`). |
+| `npm run job -- <name>` | Run one job once (`discovery`, `engagement`, `publishing`). |
 | `npm run review -- <command>` | Review drafted replies (see [Review commands](#review-commands)). |
