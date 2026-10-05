@@ -116,7 +116,9 @@ export class EngagementEngine {
     const stats: DeliveryStats = { attempted: 0, posted: 0, failed: 0, budget: 0, rateLimited: false };
 
     stats.budget = await this.postingBudget(config, limits, dryRun, now);
-    const approved = await engagements.list(niche, ["APPROVED"], stats.budget, "API");
+    // Only rows drafted in the current mode: a dry run must never consume live
+    // approvals, and dry-run drafts must never go out live.
+    const approved = await engagements.list(niche, ["APPROVED"], stats.budget, "API", dryRun);
     if (approved.length === 0) return stats;
     if (!x) {
       logger.warn({ waiting: approved.length }, "Approved API replies are waiting, but X credentials are not configured");
@@ -137,6 +139,13 @@ export class EngagementEngine {
         }
         if (error instanceof XApiError && error.retryable) {
           logger.warn({ err: error, engagementId: item.id }, "Reply failed; will retry next run");
+          continue;
+        }
+        if (error instanceof XApiError && error.isDuplicateContent) {
+          // An earlier attempt whose response was lost actually went through.
+          await engagements.markPosted(item.id, null);
+          stats.posted++;
+          logger.warn({ engagementId: item.id }, "X reports duplicate content; treating the reply as already posted");
           continue;
         }
         const message =
@@ -183,14 +192,12 @@ export class EngagementEngine {
     stats.candidates = candidates.length;
 
     const recent = await engagements.recentContents(niche, RECENT_CONTENT_WINDOW);
-    const draftedAuthors = new Map<string, number>();
 
     for (const candidate of candidates) {
       if (stats.drafted >= stats.budget) break;
 
-      const authorCount =
-        (draftedAuthors.get(candidate.authorId) ?? 0) +
-        (await engagements.countForAuthorSince(candidate.authorId, new Date(now.getTime() - DAY_MS)));
+      // Drafts created earlier in this run are already stored, so the count includes them.
+      const authorCount = await engagements.countForAuthorSince(candidate.authorId, new Date(now.getTime() - DAY_MS));
       if (authorCount >= source.maxRepliesPerAuthorPerDay) {
         stats.authorLimited++;
         continue;
@@ -199,9 +206,6 @@ export class EngagementEngine {
       const outcome = await this.draftOne(config, candidate, recent, dryRun, source);
       if (outcome === "stop") break;
       stats[outcome]++;
-      if (outcome === "drafted") {
-        draftedAuthors.set(candidate.authorId, (draftedAuthors.get(candidate.authorId) ?? 0) + 1);
-      }
     }
 
     logger.info({ niche, origin: source.origin, ...stats }, "Reply drafting finished");
@@ -296,7 +300,7 @@ export class EngagementEngine {
   ): Promise<number> {
     const niche = config.niche.name;
     if (source.mode === "auto") {
-      const waiting = (await this.deps.engagements.list(niche, ["APPROVED"], 1000, "API")).length;
+      const waiting = await this.deps.engagements.countByStatus(niche, "APPROVED", "API", dryRun);
       const budget = await this.postingBudget(config, limits, dryRun, now);
       return Math.min(source.maxDraftsPerRun, Math.max(0, budget - waiting));
     }

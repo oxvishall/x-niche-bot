@@ -8,9 +8,14 @@ import pg from "pg";
 export class WorkerLock {
   private client: pg.Client | null = null;
 
+  /**
+   * @param onLost called if the lock's connection drops (Postgres restart,
+   * network). The lock is gone at that point, so the worker should stop.
+   */
   constructor(
     private readonly databaseUrl: string,
     private readonly key: string,
+    private readonly onLost: (error: Error) => void = () => {},
   ) {}
 
   /** Returns true if this process now holds the lock. */
@@ -23,6 +28,11 @@ export class WorkerLock {
     );
     if (rows[0]?.locked) {
       this.client = client;
+      client.on("error", (error) => {
+        if (this.client !== client) return;
+        this.client = null;
+        this.onLost(error);
+      });
       return true;
     }
     await client.end();
@@ -30,12 +40,13 @@ export class WorkerLock {
   }
 
   async release(): Promise<void> {
-    if (!this.client) return;
+    const client = this.client;
+    if (!client) return;
+    this.client = null;
     try {
-      await this.client.query("SELECT pg_advisory_unlock(hashtext($1))", [this.key]);
+      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [this.key]);
     } finally {
-      await this.client.end();
-      this.client = null;
+      await client.end();
     }
   }
 }

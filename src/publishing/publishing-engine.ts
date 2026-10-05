@@ -75,8 +75,9 @@ export class PublishingEngine {
 
     const blocked = await this.postingBlockedReason(config, limits, dryRun, now);
 
-    // Approved drafts go out first.
-    const [approved] = await published.list(niche.name, ["APPROVED"], 1);
+    // Approved drafts go out first (only those drafted in the current mode, so a
+    // dry run never consumes a live approval and vice versa).
+    const [approved] = await published.list(niche.name, ["APPROVED"], 1, dryRun);
     if (approved) {
       if (blocked) return { action: "idle", reason: blocked };
       return this.post(approved.id, approved.content);
@@ -126,6 +127,12 @@ export class PublishingEngine {
       if (error instanceof XApiError && error.retryable) {
         logger.warn({ err: error, id }, "Publishing failed; will retry next run");
         return { action: "idle", reason: `retryable error: ${error.message}` };
+      }
+      if (error instanceof XApiError && error.isDuplicateContent) {
+        // An earlier attempt whose response was lost actually went through.
+        await published.markPosted(id, null);
+        logger.warn({ id }, "X reports duplicate content; treating the post as already published");
+        return { action: "posted", id, externalId: null };
       }
       const message = error instanceof Error ? error.message : String(error);
       await published.markFailed(id, message);

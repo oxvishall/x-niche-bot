@@ -134,7 +134,9 @@ The engagement pipeline: **eligible post → per-author limit → AI draft → v
 
 - **Drafting:** the prompt includes the niche voice (`voice.persona`, `tone`, `guidelines`), the post (marked as untrusted data), why it matched, and your recent replies so wording isn't repeated. The model can answer `SKIP` when there's nothing useful to add (sensitive topics, bait, missing facts).
 - **Validation:** checks X weighted length, links, hashtags, @mentions, banned phrases (built-in generic openers like "great point" plus `voice.bannedPhrases`), excluded keywords, exact duplicates (content hash) and near-duplicates (`similarityThreshold`) against the last 50 replies.
-- **Never twice:** every drafted, skipped or failed attempt is stored, and a database unique constraint stops a second reply to the same post.
+- **Never twice:** every drafted, skipped or failed attempt is stored, and a database unique constraint stops a second reply to the same post, even across niches sharing a database.
+- **Dry run vs live:** approvals made in one mode are never posted in the other.
+- **Lost responses:** if a post or reply times out but actually went through, the retry gets X's "duplicate content" error. The bot then records it as posted instead of failed.
 - **Limits:** `maxDraftsPerRun`, `maxPendingReviews` and `maxRepliesPerAuthorPerDay` in the niche config. For API delivery, the hourly and daily caps also apply.
 
 | `delivery` | How replies get posted |
@@ -169,7 +171,7 @@ npm run review -- done <id> [reply url]    # mark an intent reply as posted
 Posting your own content through the API is still allowed, so publishing defaults to `mode: "auto"`. `DRY_RUN=true` still blocks real posting. In a dry run, posts are generated and stored without X credentials.
 
 Each publishing run posts **at most one** post, and only when all of these hold:
-- fewer than `min(postsPerDay, MAX_POSTS_PER_DAY)` posts in the last 24 hours
+- fewer than `MAX_POSTS_PER_DAY` posts in the last 24 hours (or the niche's `postsPerDay`, if set and lower)
 - at least `minMinutesBetweenPosts` since the last post
 - the current hour is inside `activeHours` (optional, timezone-aware, can wrap past midnight)
 
@@ -191,7 +193,7 @@ With `mode: "review"`, drafts queue up (at most 3 at a time) and you approve the
 
 - Both jobs run once at startup, then on their intervals. A job never overlaps itself, and a failed run is logged without stopping the worker.
 - Every run is recorded in `BotRun` with its stats or error.
-- **One worker per niche:** the worker holds a Postgres advisory lock keyed on the niche name. A second instance stands by and retries every minute, so starting two can't cause double replies or posts. Different niches can run side by side on one database.
+- **One worker per niche:** the worker holds a Postgres advisory lock keyed on the niche name. A second instance stands by and retries every minute, so starting two can't cause double replies or posts. Different niches can run side by side on one database. If the lock's connection drops, the worker shuts down with exit code 1 (Docker restarts it) rather than keep running unlocked.
 - `SIGINT`/`SIGTERM` stop scheduling, wait for in-flight runs, release the lock and disconnect.
 
 ## Local setup

@@ -81,6 +81,21 @@ describe("MentionDiscovery", () => {
   });
 });
 
+describe("MentionDiscovery pagination", () => {
+  it("follows pages so older unseen mentions aren't skipped, taking the cursor from the first page", async () => {
+    const { ctx, discovery, getMentions, runs } = await setup();
+    getMentions
+      .mockResolvedValueOnce({ posts: [mention("300")], referencedPosts: new Map(), newestId: "300", nextToken: "p2" })
+      .mockResolvedValueOnce({ posts: [mention("200")], referencedPosts: new Map(), newestId: "200" });
+
+    const stats = await discovery.run(ctx, ME, undefined, NOW);
+
+    expect(stats.fetched).toBe(2);
+    expect(getMentions.mock.calls[1]![0]).toMatchObject({ paginationToken: "p2" });
+    expect(runs.searchRuns[0]!.newestId).toBe("300");
+  });
+});
+
 describe("mention replies", () => {
   it("drafts API-delivered replies with thread context, ignoring relevance score", async () => {
     const { ctx, discovery, engine, engagements, generate, config } = await setup(
@@ -126,6 +141,25 @@ describe("mention replies", () => {
     expect(stats.posted).toBe(1);
     expect(createReply).toHaveBeenCalledWith({ inReplyToPostId: "100", text: REPLY });
     expect(engagements.rows[0]).toMatchObject({ status: "POSTED", externalId: "reply-1" });
+  });
+
+  it("allows exactly maxRepliesPerAuthorPerDay replies to one author", async () => {
+    const { ctx, discovery, engine, config } = await setup(
+      { mentions: { maxRepliesPerAuthorPerDay: 2 } },
+      {
+        posts: [
+          mention("100", { authorId: "same" }),
+          mention("101", { authorId: "same", text: "@bot second question about funding rates?" }),
+          mention("102", { authorId: "same", text: "@bot and a third one about oracle design?" }),
+        ],
+      },
+    );
+    await discovery.run(ctx, ME, undefined, NOW);
+    const generate = vi.fn()
+      .mockResolvedValueOnce({ text: REPLY, model: "m" })
+      .mockResolvedValueOnce({ text: "Funding rates mostly track leverage demand on the long side.", model: "m" });
+    (engine as unknown as { deps: { ai: AiProvider } }).deps.ai = { name: "fake", generate };
+    expect(await engine.draftMentions(config, limits, true, NOW)).toMatchObject({ drafted: 2, authorLimited: 1 });
   });
 
   it("approves immediately in auto mode and respects the per-author limit", async () => {

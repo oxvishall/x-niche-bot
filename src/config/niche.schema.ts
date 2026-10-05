@@ -166,8 +166,8 @@ export const nicheConfigSchema = z
         enabled: z.boolean().default(false),
         /** "auto" posts straight away; "review" queues drafts for approval. */
         mode: z.enum(["review", "auto"]).default("auto"),
-        /** Niche cap; MAX_POSTS_PER_DAY still applies and the lower one wins. */
-        postsPerDay: z.number().int().min(0).default(0),
+        /** Niche cap. Omit to use MAX_POSTS_PER_DAY; the lower one wins. */
+        postsPerDay: z.number().int().min(0).optional(),
         minMinutesBetweenPosts: z.number().int().min(0).default(120),
         /** Themes to rotate through; the least recently used is picked next. */
         topics: stringList,

@@ -47,7 +47,7 @@ export interface FindCandidatesInput {
 export interface DiscoveredPostRepository {
   /** Inserts new posts and refreshes metrics/evaluation of known ones. */
   upsertMany(niche: string, items: EvaluatedPost[]): Promise<UpsertResult>;
-  /** Eligible posts with no engagement yet, best score first. */
+  /** Eligible posts this account hasn't engaged with (in any niche), best score first. */
   findCandidates(input: FindCandidatesInput): Promise<CandidatePost[]>;
   /** Texts of the highest-scoring eligible search posts since `since` (engaged or not). */
   findTopTexts(niche: string, since: Date, limit: number): Promise<string[]>;
@@ -140,7 +140,8 @@ export class PrismaDiscoveredPostRepository implements DiscoveredPostRepository 
         engagements: { none: {} },
       },
       orderBy: [{ relevanceScore: "desc" }, { postedAt: "desc" }],
-      take: input.limit,
+      // Over-fetch: some rows may be dropped below.
+      take: input.limit * 2,
       select: {
         id: true,
         externalId: true,
@@ -156,7 +157,18 @@ export class PrismaDiscoveredPostRepository implements DiscoveredPostRepository 
         matchedHashtags: true,
       },
     });
-    return rows.map((row) => ({ ...row, relevanceScore: row.relevanceScore ?? 0 }));
+
+    // The account must never reply twice to a post, even if another niche
+    // sharing this database already engaged with it.
+    const engagedElsewhere = await this.prisma.engagement.findMany({
+      where: { platform: "X", targetExternalId: { in: rows.map((r) => r.externalId) } },
+      select: { targetExternalId: true },
+    });
+    const taken = new Set(engagedElsewhere.map((e) => e.targetExternalId));
+    return rows
+      .filter((row) => !taken.has(row.externalId))
+      .slice(0, input.limit)
+      .map((row) => ({ ...row, relevanceScore: row.relevanceScore ?? 0 }));
   }
 
   async findTopTexts(niche: string, since: Date, limit: number): Promise<string[]> {

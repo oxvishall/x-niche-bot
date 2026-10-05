@@ -49,13 +49,20 @@ export interface EngagementRepository {
   /** Returns null when the target already has an engagement (unique constraint). */
   create(input: NewEngagement): Promise<string | null>;
   get(id: string): Promise<EngagementView | null>;
+  /** `dryRun`, when given, limits results to rows created in that mode. */
   list(
     niche: string,
     statuses: EngagementStatus[],
     limit: number,
     delivery?: ReplyDelivery,
+    dryRun?: boolean,
   ): Promise<EngagementView[]>;
-  countByStatus(niche: string, status: EngagementStatus): Promise<number>;
+  countByStatus(
+    niche: string,
+    status: EngagementStatus,
+    delivery?: ReplyDelivery,
+    dryRun?: boolean,
+  ): Promise<number>;
   /** Replies posted since `since` in the given mode (dry-run and live are counted separately). */
   countPostedSince(niche: string, since: Date, dryRun: boolean): Promise<number>;
   countForAuthorSince(authorId: string, since: Date): Promise<number>;
@@ -125,9 +132,15 @@ export class PrismaEngagementRepository implements EngagementRepository {
     statuses: EngagementStatus[],
     limit: number,
     delivery?: ReplyDelivery,
+    dryRun?: boolean,
   ): Promise<EngagementView[]> {
     const rows = await this.prisma.engagement.findMany({
-      where: { niche, status: { in: statuses }, ...(delivery && { delivery }) },
+      where: {
+        niche,
+        status: { in: statuses },
+        ...(delivery && { delivery }),
+        ...(dryRun !== undefined && { dryRun }),
+      },
       orderBy: { createdAt: "asc" },
       take: limit,
       select: VIEW_SELECT,
@@ -135,8 +148,15 @@ export class PrismaEngagementRepository implements EngagementRepository {
     return rows.map(toView);
   }
 
-  countByStatus(niche: string, status: EngagementStatus): Promise<number> {
-    return this.prisma.engagement.count({ where: { niche, status } });
+  countByStatus(
+    niche: string,
+    status: EngagementStatus,
+    delivery?: ReplyDelivery,
+    dryRun?: boolean,
+  ): Promise<number> {
+    return this.prisma.engagement.count({
+      where: { niche, status, ...(delivery && { delivery }), ...(dryRun !== undefined && { dryRun }) },
+    });
   }
 
   countPostedSince(niche: string, since: Date, dryRun: boolean): Promise<number> {

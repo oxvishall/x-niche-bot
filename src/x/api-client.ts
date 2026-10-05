@@ -186,20 +186,32 @@ export class XApiClient implements XClient {
     if (response.status === 429) throw new XRateLimitError(endpoint, resetAt);
 
     const text = await response.text();
-    const body = text ? (JSON.parse(text) as unknown) : {};
+    let body: unknown = {};
+    let unparsable = false;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        unparsable = true;
+      }
+    }
 
     if (!response.ok) {
       const error = body as ApiErrorBody;
       const detail =
         error.detail ??
         error.errors?.map((e) => e.detail ?? e.message ?? e.title).join("; ") ??
-        error.title;
+        error.title ??
+        (unparsable ? text.slice(0, 200) : undefined);
       throw new XApiError(
         `X API ${endpoint} failed with ${response.status}${detail ? `: ${detail}` : ""}`,
         response.status,
         endpoint,
         detail,
       );
+    }
+    if (unparsable) {
+      throw new XApiError(`X API ${endpoint} returned a non-JSON body`, response.status, endpoint);
     }
     return body as T;
   }

@@ -163,6 +163,33 @@ describe("EngagementEngine.deliver", () => {
     expect(engagements.rows[0]!.error).toContain('delivery "intent"');
   });
 
+  it("never delivers approvals drafted in the other mode", async () => {
+    const createReply = vi.fn(async ({ text }: { text: string }) => ({ id: "r", text }));
+    const { config, engine, engagements } = await setup(
+      [makePost({ id: "1", text: ON_TOPIC })],
+      aiReturning(replyA),
+      apiConfig,
+      { createReply } as unknown as XClient,
+    );
+    await engine.draft(config, limits, false, NOW); // live approval
+
+    expect((await engine.deliver(config, limits, true, NOW)).attempted).toBe(0); // dry run
+    expect(engagements.rows[0]!.status).toBe("APPROVED");
+    expect((await engine.deliver(config, limits, false, NOW)).posted).toBe(1);
+  });
+
+  it("treats a duplicate-content rejection as already posted", async () => {
+    const x = {
+      createReply: vi
+        .fn()
+        .mockRejectedValue(new XApiError("failed", 403, "POST /2/tweets", "You are not allowed to create a Tweet with duplicate content.")),
+    } as unknown as XClient;
+    const { config, engine, engagements } = await setup([makePost({ id: "1", text: ON_TOPIC })], aiReturning(replyA), apiConfig, x);
+    await engine.draft(config, limits, false, NOW);
+    expect(await engine.deliver(config, limits, false, NOW)).toMatchObject({ posted: 1, failed: 0 });
+    expect(engagements.rows[0]).toMatchObject({ status: "POSTED", externalId: null });
+  });
+
   it("does nothing for intent delivery", async () => {
     const { config, engine } = await setup([], aiReturning());
     expect(await engine.deliver(config, limits, false, NOW)).toMatchObject({ attempted: 0 });

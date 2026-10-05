@@ -31,7 +31,13 @@ export interface PublishedPostView {
 export interface PublishedPostRepository {
   create(input: NewPublishedPost): Promise<string>;
   get(id: string): Promise<PublishedPostView | null>;
-  list(niche: string, statuses: PublishedPostStatus[], limit: number): Promise<PublishedPostView[]>;
+  /** `dryRun`, when given, limits results to rows created in that mode. */
+  list(
+    niche: string,
+    statuses: PublishedPostStatus[],
+    limit: number,
+    dryRun?: boolean,
+  ): Promise<PublishedPostView[]>;
   countByStatus(niche: string, status: PublishedPostStatus): Promise<number>;
   countPostedSince(niche: string, since: Date, dryRun: boolean): Promise<number>;
   lastPostedAt(niche: string, dryRun: boolean): Promise<Date | null>;
@@ -69,9 +75,14 @@ export class PrismaPublishedPostRepository implements PublishedPostRepository {
     return this.prisma.publishedPost.findUnique({ where: { id }, select: VIEW_SELECT });
   }
 
-  list(niche: string, statuses: PublishedPostStatus[], limit: number): Promise<PublishedPostView[]> {
+  list(
+    niche: string,
+    statuses: PublishedPostStatus[],
+    limit: number,
+    dryRun?: boolean,
+  ): Promise<PublishedPostView[]> {
     return this.prisma.publishedPost.findMany({
-      where: { niche, status: { in: statuses } },
+      where: { niche, status: { in: statuses }, ...(dryRun !== undefined && { dryRun }) },
       orderBy: { createdAt: "asc" },
       take: limit,
       select: VIEW_SELECT,

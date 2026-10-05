@@ -48,6 +48,7 @@ export async function runReviewCommand(
       if (!item || item.status !== "PENDING_REVIEW") return [`No pending draft with id ${id ?? "(missing)"}.`];
 
       const edited = rest.join(" ").trim();
+      let text = item.content!;
       if (edited) {
         const check = validateContent(edited, {
           maxLength: 280,
@@ -63,11 +64,11 @@ export async function runReviewCommand(
           return [`Edited text was not approved: ${check.status === "invalid" ? check.issues.join(", ") : "empty"}`];
         }
         await engagements.approve(item.id, check.text, check.hash);
+        text = check.text;
       } else {
         await engagements.approve(item.id);
       }
 
-      const text = edited || item.content!;
       return item.delivery === "INTENT"
         ? [`Approved ${item.id}. Post it yourself:`, `  ${replyIntentUrl(item.targetExternalId, text)}`, `Then run: npm run review -- done ${item.id}`]
         : [`Approved ${item.id}. It will be posted by the next engagement run.`];

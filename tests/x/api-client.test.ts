@@ -140,6 +140,21 @@ describe("XApiClient", () => {
   });
 });
 
+describe("XApiClient error bodies", () => {
+  it("turns a non-JSON gateway error into a retryable XApiError", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("<html>503 Service Unavailable</html>", { status: 503 }));
+    const error = await clientWith(fetchMock).createPost({ text: "hi" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(XApiError);
+    expect((error as XApiError).retryable).toBe(true);
+    expect((error as XApiError).detail).toContain("503 Service Unavailable");
+  });
+
+  it("recognizes X's duplicate-content rejection", () => {
+    expect(new XApiError("failed", 403, "POST /2/tweets", "You are not allowed to create a Tweet with duplicate content.").isDuplicateContent).toBe(true);
+    expect(new XApiError("failed", 403, "POST /2/tweets", "Forbidden").isDuplicateContent).toBe(false);
+  });
+});
+
 describe("DryRunXClient", () => {
   it("never calls write methods on the real client", async () => {
     const inner = {

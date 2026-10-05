@@ -65,7 +65,7 @@
   "publishing": {
     "enabled": false,
     "mode": "auto",
-    "postsPerDay": 0,
+    "postsPerDay": 3,
     "minMinutesBetweenPosts": 120,
     "topics": [],
     "useDiscoveredContext": true,

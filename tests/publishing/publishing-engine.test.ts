@@ -81,6 +81,29 @@ describe("PublishingEngine", () => {
     expect(createPost).toHaveBeenCalledWith({ text: POST_A });
   });
 
+  it("uses MAX_POSTS_PER_DAY when the niche doesn't set postsPerDay", async () => {
+    const config = makeNiche({ publishing: { enabled: true } });
+    expect(config.publishing.postsPerDay).toBeUndefined();
+    const { engine } = setup({}, POST_A);
+    expect(await engine.run(config, { maxPostsPerDay: 1 }, false, NOW)).toMatchObject({ action: "posted" });
+  });
+
+  it("treats a duplicate-content rejection as already published", async () => {
+    const { config, engine, published, createPost } = setup({}, POST_A);
+    createPost.mockRejectedValueOnce(new XApiError("failed", 403, "POST /2/tweets", "duplicate content"));
+    expect(await engine.run(config, limits, false, NOW)).toMatchObject({ action: "posted", externalId: null });
+    expect(published.rows[0]!.status).toBe("POSTED");
+  });
+
+  it("never posts approvals drafted in the other mode", async () => {
+    const { config, engine, published, createPost } = setup({ publishing: { mode: "review" } }, POST_A);
+    await engine.run(config, limits, true, NOW); // dry-run draft
+    await published.approve(published.rows[0]!.id);
+    const live = await engine.run(config, limits, false, NOW);
+    expect(createPost).not.toHaveBeenCalledWith({ text: POST_A });
+    expect(live.action).not.toBe("posted");
+  });
+
   it("stays idle outside active hours", async () => {
     // NOW is 12:00 UTC.
     const { config, engine, ai } = setup({ publishing: { activeHours: { start: 18, end: 22, timezone: "UTC" } } }, POST_A);

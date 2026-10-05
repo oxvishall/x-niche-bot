@@ -48,6 +48,12 @@ describe("review commands", () => {
     expect(engagements.rows[0]).toMatchObject({ status: "APPROVED", content: "Edited reply text" });
   });
 
+  it("builds the intent link from the cleaned edited text", async () => {
+    const { config, engagements, id } = await setup();
+    const out = await runReviewCommand(["approve", id, '"Quoted', 'edit"'], config, engagements);
+    expect(out.join("\n")).toContain(replyIntentUrl("1234567890", "Quoted edit"));
+  });
+
   it("rejects drafts and reports unknown ids", async () => {
     const { config, engagements, id } = await setup();
     expect(await runReviewCommand(["reject", id], config, engagements)).toEqual([`Rejected ${id}.`]);
@@ -63,5 +69,7 @@ describe("intent helpers", () => {
     expect(parsePostId("https://x.com/user/status/1840000000000000001?s=20")).toBe("1840000000000000001");
     expect(parsePostId("1840000000000000001")).toBe("1840000000000000001");
     expect(parsePostId("not a url")).toBeNull();
+    expect(parsePostId("https://x.com/1234567/status/1899999999999")).toBe("1899999999999");
+    expect(parsePostId("https://x.com/1234567")).toBeNull();
   });
 });

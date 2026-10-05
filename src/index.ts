@@ -32,11 +32,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  const lock = new WorkerLock(env.DATABASE_URL, `x-niche-bot:${niche.niche.name}`);
   const scheduler = new Scheduler(logger.child({ module: "scheduler" }));
   for (const job of buildJobs(app)) scheduler.register(job);
 
   let shuttingDown = false;
+  const lock = new WorkerLock(env.DATABASE_URL, `x-niche-bot:${niche.niche.name}`, (error) => {
+    // Another instance may take over now, so stop rather than risk double posting.
+    logger.error({ err: error }, "Lost the worker lock connection; shutting down");
+    process.exitCode = 1;
+    void shutdown("lock-lost");
+  });
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;

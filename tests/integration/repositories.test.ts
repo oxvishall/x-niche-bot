@@ -1,10 +1,11 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiscoveryContext } from "../../src/discovery/query.js";
 import { evaluatePost } from "../../src/discovery/relevance.js";
 import { PrismaDiscoveredPostRepository } from "../../src/database/repositories/discovered-post-repository.js";
 import { PrismaEngagementRepository } from "../../src/database/repositories/engagement-repository.js";
 import { PrismaPublishedPostRepository } from "../../src/database/repositories/published-post-repository.js";
 import { PrismaRunRepository } from "../../src/database/repositories/run-repository.js";
+import pg from "pg";
 import { WorkerLock } from "../../src/scheduler/lock.js";
 import type { NormalizedPost } from "../../src/types/index.js";
 import { makeNiche, makePost } from "../helpers.js";
@@ -144,6 +145,27 @@ describe("mentions in PrismaDiscoveredPostRepository", () => {
   });
 });
 
+describe("cross-niche engagement", () => {
+  it("skips posts this account already engaged with from another niche", async () => {
+    const post = makePost({ id: "77", text: ON_TOPIC, createdAt: minutesAgo(30) });
+    await posts.upsertMany("niche-a", [evaluated(post)]);
+    await posts.upsertMany("niche-b", [evaluated(post)]);
+    const a = await prisma.discoveredPost.findFirstOrThrow({ where: { niche: "niche-a" } });
+    await engagements.create({
+      niche: "niche-a",
+      discoveredPostId: a.id,
+      targetExternalId: "77",
+      targetAuthorId: a.authorId,
+      status: "POSTED",
+      delivery: "INTENT",
+      dryRun: false,
+    });
+
+    const input = { origin: "SEARCH" as const, minScore: 0, postedAfter: minutesAgo(600), postedBefore: new Date(), limit: 10 };
+    expect(await posts.findCandidates({ ...input, niche: "niche-b" })).toEqual([]);
+  });
+});
+
 describe("PrismaEngagementRepository", () => {
   async function seedPost(id: string, authorId = "a1") {
     await posts.upsertMany(NICHE, [evaluated(makePost({ id, authorId, text: ON_TOPIC, createdAt: minutesAgo(30) }))]);
@@ -236,5 +258,25 @@ describe("WorkerLock", () => {
     expect(await b.tryAcquire()).toBe(true);
     await b.release();
     await other.release();
+  });
+
+  it("reports a lost connection so the worker can stop", async () => {
+    let lost: Error | undefined;
+    const lock = new WorkerLock(databaseUrl(), "x-niche-bot:lost", (error) => (lost = error));
+    expect(await lock.tryAcquire()).toBe(true);
+
+    const admin = new pg.Client({ connectionString: databaseUrl() });
+    await admin.connect();
+    await admin.query(
+      "SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory' AND objid::int = hashtext($1)",
+      ["x-niche-bot:lost"],
+    );
+    await admin.end();
+
+    await vi.waitFor(() => expect(lost).toBeInstanceOf(Error), { timeout: 5000 });
+    await lock.release(); // no-op after loss, must not throw
+    const again = new WorkerLock(databaseUrl(), "x-niche-bot:lost");
+    expect(await again.tryAcquire()).toBe(true);
+    await again.release();
   });
 });

@@ -7,9 +7,12 @@ import type { RunRepository } from "../database/repositories/run-repository.js";
 import type { NormalizedAuthor, NormalizedPost } from "../types/index.js";
 import { HOUR_MS } from "../utils/rate-limit.js";
 import { matchTerms } from "../utils/text.js";
-import type { XClient } from "../x/client.js";
+import type { MentionsResult, XClient } from "../x/client.js";
 import type { DiscoveryContext } from "./query.js";
 import { scoreRelevance } from "./relevance.js";
+
+/** Pages of mentions fetched per run at most (each page costs API quota). */
+const MAX_MENTION_PAGES = 5;
 
 export interface MentionStats {
   fetched: number;
@@ -49,7 +52,7 @@ export class MentionDiscovery {
   ) {}
 
   async run(ctx: DiscoveryContext, me: NormalizedAuthor, botRunId?: string, now: Date = new Date()): Promise<MentionStats> {
-    const { x, runs, posts, logger } = this.deps;
+    const { runs, posts, logger } = this.deps;
     const { mentions, niche } = ctx.config;
     // Mentions share the search cursor table, keyed by a pseudo-query.
     const cursorKey = `mentions:${me.id}`;
@@ -59,12 +62,7 @@ export class MentionDiscovery {
     const searchRunId = await runs.startSearchRun({ niche: niche.name, query: cursorKey, ...(botRunId && { botRunId }) });
 
     try {
-      const result = await x.getMentions({
-        userId: me.id,
-        maxResults: mentions.maxResults,
-        startTime: new Date(now.getTime() - mentions.maxAgeHours * HOUR_MS),
-        ...(sinceId && { sinceId }),
-      });
+      const result = await this.fetchMentions(me.id, mentions.maxResults, mentions.maxAgeHours, now, sinceId);
       stats.fetched = result.posts.length;
 
       const items: EvaluatedPost[] = result.posts.map((post) => {
@@ -103,5 +101,40 @@ export class MentionDiscovery {
 
     logger.info({ niche: niche.name, ...stats }, "Mention discovery finished");
     return stats;
+  }
+
+  /**
+   * Fetches every page of mentions newer than the cursor (up to a cap). The
+   * cursor jumps to the newest ID afterwards, so stopping at the first page
+   * would silently drop any older unseen mentions.
+   */
+  private async fetchMentions(
+    userId: string,
+    maxResults: number,
+    maxAgeHours: number,
+    now: Date,
+    sinceId: string | undefined,
+  ): Promise<MentionsResult> {
+    const posts: NormalizedPost[] = [];
+    const referencedPosts = new Map<string, NormalizedPost>();
+    let newestId: string | undefined;
+    let paginationToken: string | undefined;
+
+    for (let page = 0; page < MAX_MENTION_PAGES; page++) {
+      const result = await this.deps.x.getMentions({
+        userId,
+        maxResults,
+        startTime: new Date(now.getTime() - maxAgeHours * HOUR_MS),
+        ...(sinceId && { sinceId }),
+        ...(paginationToken && { paginationToken }),
+      });
+      posts.push(...result.posts);
+      for (const [id, post] of result.referencedPosts) referencedPosts.set(id, post);
+      // Newest first: the first page holds the newest ID.
+      newestId ??= result.newestId;
+      paginationToken = result.nextToken;
+      if (!paginationToken) break;
+    }
+    return { posts, referencedPosts, ...(newestId && { newestId }) };
   }
 }

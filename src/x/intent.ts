@@ -14,6 +14,8 @@ export function replyIntentUrl(inReplyToPostId: string, text: string): string {
 
 /** Extracts a post ID from a status URL, or returns the input if it is already an ID. */
 export function parsePostId(value: string): string | null {
-  const match = value.trim().match(/(?:status\/)?(\d{5,25})(?:[/?#]|$)/);
+  const trimmed = value.trim();
+  // Prefer the ID after "/status/" so a numeric username in the URL isn't mistaken for it.
+  const match = trimmed.match(/\/status(?:es)?\/(\d{5,25})(?:[/?#]|$)/) ?? trimmed.match(/^(\d{5,25})$/);
   return match?.[1] ?? null;
 }

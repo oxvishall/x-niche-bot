@@ -170,15 +170,19 @@ export class InMemoryEngagementRepository implements EngagementRepository {
     return row ? this.view(row) : null;
   }
 
-  async list(niche: string, statuses: EngagementStatus[], limit: number, delivery?: ReplyDelivery) {
+  private matches(r: (typeof this.rows)[number], niche: string, delivery?: ReplyDelivery, dryRun?: boolean) {
+    return r.niche === niche && (!delivery || r.delivery === delivery) && (dryRun === undefined || r.dryRun === dryRun);
+  }
+
+  async list(niche: string, statuses: EngagementStatus[], limit: number, delivery?: ReplyDelivery, dryRun?: boolean) {
     return this.rows
-      .filter((r) => r.niche === niche && statuses.includes(r.status) && (!delivery || r.delivery === delivery))
+      .filter((r) => this.matches(r, niche, delivery, dryRun) && statuses.includes(r.status))
       .slice(0, limit)
       .map((r) => this.view(r));
   }
 
-  async countByStatus(niche: string, status: EngagementStatus) {
-    return this.rows.filter((r) => r.niche === niche && r.status === status).length;
+  async countByStatus(niche: string, status: EngagementStatus, delivery?: ReplyDelivery, dryRun?: boolean) {
+    return this.rows.filter((r) => this.matches(r, niche, delivery, dryRun) && r.status === status).length;
   }
 
   async countPostedSince(niche: string, since: Date, dryRun: boolean) {
@@ -249,8 +253,11 @@ export class InMemoryPublishedPostRepository implements PublishedPostRepository 
     return row ? this.view(row) : null;
   }
 
-  async list(niche: string, statuses: PublishedPostStatus[], limit: number) {
-    return this.rows.filter((r) => r.niche === niche && statuses.includes(r.status)).slice(0, limit).map((r) => this.view(r));
+  async list(niche: string, statuses: PublishedPostStatus[], limit: number, dryRun?: boolean) {
+    return this.rows
+      .filter((r) => r.niche === niche && statuses.includes(r.status) && (dryRun === undefined || r.dryRun === dryRun))
+      .slice(0, limit)
+      .map((r) => this.view(r));
   }
 
   async countByStatus(niche: string, status: PublishedPostStatus) {
