@@ -3,6 +3,8 @@
     "name": "example",
     "description": "Placeholder niche. Copy this file and point NICHE_CONFIG_PATH at your copy.",
     "searchQueries": [],
+    "keywords": [],
+    "hashtags": [],
     "excludedKeywords": ["giveaway", "airdrop", "follow back"],
     "languages": ["en"],
     "minimumRelevanceScore": 0.5
@@ -10,6 +12,23 @@
   "targeting": {
     "includeAuthors": [],
     "excludeAuthors": []
+  },
+  "search": {
+    "excludeReplies": true,
+    "excludeQuotes": false,
+    "maxPagesPerQuery": 1
+  },
+  "filters": {
+    "minPostAgeMinutes": 2,
+    "maxPostAgeMinutes": 720,
+    "minTextLength": 20,
+    "maxHashtags": 5,
+    "minimumEngagement": { "likes": 0, "replies": 0, "reposts": 0 }
+  },
+  "scoring": {
+    "weights": { "keyword": 0.35, "hashtag": 0.15, "author": 0.1, "engagement": 0.2, "recency": 0.2 },
+    "keywordSaturation": 2,
+    "engagementTarget": 50
   },
   "engagement": {
     "enabled": false,

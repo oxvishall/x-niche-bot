@@ -14,10 +14,25 @@ describe("niche config", () => {
       niche: { name: "web3-defi", searchQueries: ["defi", "#DeFi"] },
       targeting: { includeAuthors: ["@SomeAuthor"] },
     });
-    expect(config.niche.languages).toEqual(["en"]);
+    expect(config.niche.languages).toEqual([]);
     expect(config.niche.minimumRelevanceScore).toBe(0.5);
+    expect(config.filters.maxPostAgeMinutes).toBe(720);
+    expect(config.filters.minimumEngagement.likes).toBe(0);
+    expect(config.scoring.weights.keyword).toBe(0.35);
+    expect(config.search.excludeReplies).toBe(true);
     expect(config.targeting.includeAuthors).toEqual(["someauthor"]);
     expect(config.publishing.enabled).toBe(false);
+  });
+
+  it("normalizes hashtags and validates filter ranges", () => {
+    const config = parseNicheConfig({ niche: { name: "n", hashtags: ["#DeFi", "web3"] } });
+    expect(config.niche.hashtags).toEqual(["defi", "web3"]);
+    expect(() =>
+      parseNicheConfig({
+        niche: { name: "n" },
+        filters: { minPostAgeMinutes: 60, maxPostAgeMinutes: 30 },
+      }),
+    ).toThrow(/maxPostAgeMinutes/);
   });
 
   it("rejects an invalid niche name", () => {
