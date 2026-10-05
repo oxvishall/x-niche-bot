@@ -106,9 +106,16 @@ model DiscoveredPost {
   quoteCount  Int @default(0)
 
   relevanceScore  Float?
+  /// Per-component scores (keyword, hashtag, author, engagement, recency).
+  scoreBreakdown  Json?
   matchedKeywords String[]
+  matchedHashtags String[]
   excludedMatches String[]
+  /// Why the post failed hard filters, e.g. "too-old", "excluded-keyword".
+  filterReasons   String[]
   passedFilters   Boolean?
+  /// Passed filters and met the niche's minimum relevance score.
+  eligible        Boolean  @default(false)
 
   raw          Json?
   discoveredAt DateTime @default(now())
@@ -118,7 +125,7 @@ model DiscoveredPost {
   engagements Engagement[]
 
   @@unique([platform, externalId, niche])
-  @@index([niche, passedFilters, relevanceScore])
+  @@index([niche, eligible, relevanceScore])
   @@index([niche, postedAt])
   @@index([authorId])
   @@index([searchRunId])
