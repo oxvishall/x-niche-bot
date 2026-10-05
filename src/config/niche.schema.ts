@@ -130,7 +130,10 @@ export const nicheConfigSchema = z
          * when the author mentioned/quoted you, unless you have Enterprise access.
          */
         delivery: z.enum(["intent", "api"]).default("intent"),
-        maxRepliesPerHour: z.number().int().min(0).default(0),
+        /** Niche-specific hourly cap. Omit to use MAX_REPLIES_PER_HOUR; the lower one wins. */
+        maxRepliesPerHour: z.number().int().min(0).optional(),
+        /** In review mode, stop drafting while this many drafts await review. */
+        maxPendingReviews: z.number().int().min(1).default(20),
         /** Replies drafted per engagement run (each costs one AI call). */
         maxDraftsPerRun: z.number().int().min(0).max(50).default(3),
         maxRepliesPerAuthorPerDay: z.number().int().min(1).default(1),

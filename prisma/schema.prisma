@@ -139,6 +139,8 @@ model Engagement {
   discoveredPostId String
   /// The post being replied to. Unique with type, so a post is never engaged twice.
   targetExternalId String
+  /// Author of the target post, for per-author limits.
+  targetAuthorId   String
   type             EngagementType   @default(REPLY)
   status           EngagementStatus @default(PENDING_REVIEW)
   content          String?
@@ -147,9 +149,14 @@ model Engagement {
   /// The ID of our reply once posted.
   externalId       String?
   dryRun           Boolean          @default(true)
+  /// Model that drafted the content.
+  aiModel          String?
+  /// Why a draft was skipped or rejected by validation.
+  validationIssues String[]
   error            String?
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
+  reviewedAt       DateTime?
   postedAt         DateTime?
 
   discoveredPost DiscoveredPost @relation(fields: [discoveredPostId], references: [id], onDelete: Cascade)
@@ -157,6 +164,8 @@ model Engagement {
   @@unique([platform, targetExternalId, type])
   @@unique([platform, externalId])
   @@index([niche, status, createdAt])
+  @@index([niche, status, postedAt])
+  @@index([targetAuthorId, createdAt])
   @@index([contentHash])
   @@index([discoveredPostId])
 }
